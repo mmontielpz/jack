@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly VERSION="0.1.0-bootstrap"
+
+usage() {
+  cat <<'EOF'
+jack - one command to jump from your Mac to your Linux workstation.
+
+Usage:
+  jack           Connect to your workstation (not implemented yet)
+  jack --help    Show this help
+
+Transport: macOS -> Tailscale -> SSH -> Workstation
+EOF
+}
+
+main() {
+  if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    usage
+    exit 0
+  fi
+
+  echo "jack has been initialized, but remote connection setup is not implemented yet."
+  echo "Run the setup scripts in scripts/ once they are implemented (see README)."
+}
+
+main "$@"
