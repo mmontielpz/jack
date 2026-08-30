@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: |
+          bash -n bin/jack
+          bash -n scripts/setup-macos.sh
+          bash -n scripts/setup-workstation.sh
+
+      - name: Executable check
+        run: |
+          test -x bin/jack
+          test -x scripts/setup-macos.sh
+          test -x scripts/setup-workstation.sh
+
+      - name: Smoke test
+        run: ./bin/jack --help
