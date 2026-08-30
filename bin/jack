@@ -1,28 +1,118 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly VERSION="0.1.0-bootstrap"
+readonly REMOTE_USER="mike"
+readonly REMOTE_HOST="100.90.245.116"
 
 usage() {
   cat <<'EOF'
-jack - one command to jump from your Mac to your Linux workstation.
+jack — connect to your workstation
 
 Usage:
-  jack           Connect to your workstation (not implemented yet)
-  jack --help    Show this help
+  jack
+  jack --status
+  jack --help
 
 Transport: macOS -> Tailscale -> SSH -> Workstation
 EOF
 }
 
-main() {
-  if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    usage
-    exit 0
+check_ssh() {
+  command -v ssh >/dev/null 2>&1
+}
+
+check_tailscale_installed() {
+  command -v tailscale >/dev/null 2>&1
+}
+
+check_tailscale_connected() {
+  check_tailscale_installed || return 1
+  tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"'
+}
+
+require_ssh() {
+  if ! check_ssh; then
+    echo "jack: ssh is not installed" >&2
+    exit 1
+  fi
+}
+
+require_tailscale() {
+  if ! check_tailscale_installed; then
+    echo "jack: Tailscale is not installed" >&2
+    echo "Run: ./scripts/setup-macos.sh" >&2
+    exit 1
   fi
 
-  echo "jack has been initialized, but remote connection setup is not implemented yet."
-  echo "Run the setup scripts in scripts/ once they are implemented (see README)."
+  if ! check_tailscale_connected; then
+    echo "jack: Tailscale is not connected" >&2
+    echo "Open Tailscale and connect, then run jack again." >&2
+    exit 1
+  fi
+}
+
+cmd_status() {
+  local ok=0
+
+  local tailscale_line ssh_line
+  if check_tailscale_connected; then
+    tailscale_line="connected"
+  elif check_tailscale_installed; then
+    tailscale_line="not connected"
+    ok=1
+  else
+    tailscale_line="not installed"
+    ok=1
+  fi
+
+  if check_ssh; then
+    ssh_line="available"
+  else
+    ssh_line="not installed"
+    ok=1
+  fi
+
+  cat <<EOF
+jack
+
+Tailscale:   ${tailscale_line}
+Workstation: ${REMOTE_HOST}
+User:        ${REMOTE_USER}
+SSH:         ${ssh_line}
+EOF
+  echo
+  if [[ "${ok}" -eq 0 ]]; then
+    echo "Ready."
+  else
+    echo "Not ready."
+  fi
+
+  return "${ok}"
+}
+
+cmd_connect() {
+  require_ssh
+  require_tailscale
+  exec ssh "${REMOTE_USER}@${REMOTE_HOST}"
+}
+
+main() {
+  case "${1:-}" in
+    --help|-h)
+      usage
+      ;;
+    --status)
+      cmd_status
+      ;;
+    "")
+      cmd_connect
+      ;;
+    *)
+      echo "jack: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
 }
 
 main "$@"
