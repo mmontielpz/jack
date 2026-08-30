@@ -2,21 +2,45 @@
 
 `jack` lets you securely jump from your Mac into your Linux workstation.
 
-## Desired UX
+```text
+Mac → Tailscale → Tailscale SSH → Workstation
+```
 
-After one-time setup:
+## Install on Mac
+
+```bash
+git clone https://github.com/mmontielpz/jack
+cd jack
+./scripts/setup-macos.sh
+```
+
+## Check
+
+```bash
+jack --status
+```
+
+## Connect
 
 ```bash
 jack
 ```
 
-Under the hood:
+## Requirements
 
-```text
-Mac → Tailscale → SSH → Workstation
+- macOS
+- Homebrew
+- A Tailscale account and tailnet
+- The workstation provisioned for Tailscale SSH
+
+## Uninstall
+
+```bash
+./scripts/setup-macos.sh --uninstall
 ```
 
-No mandatory arguments. No Tailscale or SSH knowledge required for normal use.
+Removes only what `jack` installed (the `~/.local/bin/jack` symlink and its
+PATH entry). Homebrew, Tailscale, and SSH configuration are left untouched.
 
 ## Principles
 
@@ -27,16 +51,10 @@ No mandatory arguments. No Tailscale or SSH knowledge required for normal use.
 - Simple setup
 - Simple removal
 
-## Status
-
-**Slice 01 — Bootstrap.** This establishes only the project foundation: the
-repository layout and the `jack` CLI contract. Tailscale and SSH are not yet
-configured, and no host system is modified by this slice.
-
 ## Layout
 
 ```text
-bin/jack                    - the jack CLI
-scripts/setup-macos.sh      - future: prepare the Mac client
+bin/jack                     - the jack CLI
+scripts/setup-macos.sh       - prepares the Mac client
 scripts/setup-workstation.sh - future: prepare the Linux workstation
 ```

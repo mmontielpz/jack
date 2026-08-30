@@ -24,3 +24,23 @@ jobs:
 
       - name: Smoke test
         run: ./bin/jack --help
+
+      - name: jack --status is deterministic on Linux (no Tailscale, no mutation)
+        run: |
+          set +e
+          ./bin/jack --status
+          status=$?
+          set -e
+          test "$status" -ne 0
+          test ! -e "$HOME/.local/bin/jack"
+
+      - name: setup-macos.sh rejects unsupported OS without mutating the runner
+        run: |
+          set +e
+          ./scripts/setup-macos.sh
+          status=$?
+          set -e
+          test "$status" -ne 0
+          test ! -e "$HOME/.local/bin/jack"
+          test ! -f "$HOME/.zprofile"
+          test ! -f "$HOME/.bash_profile"
