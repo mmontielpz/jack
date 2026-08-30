@@ -42,5 +42,4 @@ jobs:
           set -e
           test "$status" -ne 0
           test ! -e "$HOME/.local/bin/jack"
-          test ! -f "$HOME/.zprofile"
-          test ! -f "$HOME/.bash_profile"
+          ! grep -qsF "added by jack setup-macos.sh" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.profile" 2>/dev/null
