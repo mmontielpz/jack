@@ -34,6 +34,26 @@ jobs:
           test "$status" -ne 0
           test ! -e "$HOME/.local/bin/jack"
 
+      - name: jack rejects unknown arguments; jack mac fails fast without Tailscale
+        run: |
+          if ./bin/jack bogus; then exit 1; fi
+          if ./bin/jack mac extra; then exit 1; fi
+          set +e
+          out="$(./bin/jack mac 2>&1)"
+          status=$?
+          set -e
+          test "$status" -ne 0
+          echo "$out" | grep -q "Tailscale is not installed"
+
+      - name: setup-workstation.sh rejects non-Arch systems without mutating the runner
+        run: |
+          set +e
+          ./scripts/setup-workstation.sh
+          status=$?
+          set -e
+          test "$status" -ne 0
+          test ! -e "$HOME/.local/bin/jack"
+
       - name: setup-macos.sh rejects unsupported OS without mutating the runner
         run: |
           set +e
