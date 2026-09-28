@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly REMOTE_USER="mike"
-readonly REMOTE_HOST="100.90.245.116"
+readonly WORKSTATION_USER="mike"
+readonly WORKSTATION_HOST="100.90.245.116"
+
+readonly MAC_USER="mlopez"
+readonly MAC_HOST="100.76.175.55"
 
 usage() {
   cat <<'EOF'
-jack — connect to your workstation
+jack — connect to your machines
 
 Usage:
-  jack
-  jack --status
-  jack --help
+  jack          Connect to workstation
+  jack mac      Connect to Mac
+  jack --status Show status
+  jack --help   Show help
 
-Transport: macOS -> Tailscale -> SSH -> Workstation
+Transport: Tailscale -> SSH
 EOF
 }
 
@@ -30,6 +34,11 @@ check_tailscale_connected() {
   tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"'
 }
 
+# One short Tailscale-layer ping; succeeds on any pong, relayed or direct.
+check_reachable() {
+  tailscale ping --c 1 --timeout 3s --until-direct=false "$1" >/dev/null 2>&1
+}
+
 require_ssh() {
   if ! check_ssh; then
     echo "jack: ssh is not installed" >&2
@@ -40,14 +49,24 @@ require_ssh() {
 require_tailscale() {
   if ! check_tailscale_installed; then
     echo "jack: Tailscale is not installed" >&2
-    echo "Run: ./scripts/setup-macos.sh" >&2
+    echo "Run: ./scripts/setup-macos.sh (Mac) or ./scripts/setup-workstation.sh (Linux)" >&2
     exit 1
   fi
 
   if ! check_tailscale_connected; then
     echo "jack: Tailscale is not connected" >&2
-    echo "Open Tailscale and connect, then run jack again." >&2
+    echo "Connect Tailscale, then run jack again." >&2
     exit 1
+  fi
+}
+
+reachability() {
+  if ! check_tailscale_connected; then
+    echo "unknown"
+  elif check_reachable "$1"; then
+    echo "reachable"
+  else
+    echo "not reachable"
   fi
 }
 
@@ -75,10 +94,15 @@ cmd_status() {
   cat <<EOF
 jack
 
-Tailscale:   ${tailscale_line}
-Workstation: ${REMOTE_HOST}
-User:        ${REMOTE_USER}
-SSH:         ${ssh_line}
+Tailscale: ${tailscale_line}
+
+Workstation:
+  ${WORKSTATION_USER}@${WORKSTATION_HOST} ($(reachability "${WORKSTATION_HOST}"))
+
+Mac:
+  ${MAC_USER}@${MAC_HOST} ($(reachability "${MAC_HOST}"))
+
+SSH: ${ssh_line}
 EOF
   echo
   if [[ "${ok}" -eq 0 ]]; then
@@ -93,16 +117,35 @@ EOF
 cmd_connect() {
   require_ssh
   require_tailscale
-  exec ssh "${REMOTE_USER}@${REMOTE_HOST}"
+  exec ssh "${WORKSTATION_USER}@${WORKSTATION_HOST}"
+}
+
+cmd_mac() {
+  require_ssh
+  require_tailscale
+  if ! check_reachable "${MAC_HOST}"; then
+    echo "jack: Mac is not reachable over Tailscale" >&2
+    exit 1
+  fi
+  exec ssh "${MAC_USER}@${MAC_HOST}"
 }
 
 main() {
+  if [[ $# -gt 1 ]]; then
+    echo "jack: too many arguments" >&2
+    usage >&2
+    exit 1
+  fi
+
   case "${1:-}" in
     --help|-h)
       usage
       ;;
     --status)
       cmd_status
+      ;;
+    mac)
+      cmd_mac
       ;;
     "")
       cmd_connect
