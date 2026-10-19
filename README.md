@@ -72,6 +72,10 @@ PATH entry). Homebrew, Tailscale, and SSH configuration are left untouched.
 - Simple setup
 - Simple removal
 
+## Contributing
+
+Development workflow: [.ai/WORKFLOW.md](.ai/WORKFLOW.md)
+
 ## Layout
 
 ```text
