@@ -1,6 +1,6 @@
 # JACK engineering workflow
 
-Canonical, lightweight workflow for humans and AI agents working on JACK. Slice records live in [history/](history/).
+Canonical, lightweight workflow for humans and AI agents working on JACK. Contributor setup: [CONTRIBUTING.md](../CONTRIBUTING.md). Slice records: [history/](history/).
 
 ## 1. Product identity
 
@@ -23,12 +23,17 @@ Each slice has: one focused goal; explicit scope and exclusions; acceptance crit
 ## 4. GitHub flow
 
 1. Preflight: correct repo, `main` fetched and fast-forwarded, working tree clean.
-2. Short-lived branch from `main` (`feat/…`, `fix/…`, `docs/…`, `ci/…`). Never commit to `main`.
-3. Run local checks (section 6).
-4. Conventional commit; push; open PR to `main`.
-5. Required check `checks` must pass (CI runs on pull requests).
-6. Enable squash auto-merge. The repo allows squash only and deletes the branch on merge.
-7. Verify the PR merged; fast-forward local `main`; delete the merged local branch (`git branch -d`); confirm clean tree.
+2. Short-lived branch from `main` (`feat/…`, `fix/…`, `docs/…`, `chore/…`, `ci/…`). Never commit to `main`.
+3. Run `./scripts/dev-check.sh` (section 6).
+4. Conventional commit; push; open PR to `main`. The PR title becomes the squash commit title.
+5. Required check `checks` (which runs `dev-check.sh`) must pass. CI runs on pull requests only.
+6. Enable squash auto-merge. The repo allows squash only and deletes the remote branch on merge.
+7. Cleanup after merge:
+   - Verify the PR state is `MERGED` and CI passed.
+   - `git fetch`, fast-forward local `main`, confirm it equals `origin/main`.
+   - Squash merges rewrite history, so `git branch -d` will refuse. Do not use `-D` blindly, and do not infer safety from an empty `git diff` alone: the branch may hold commits that never reached the PR.
+   - Check `git log main..<branch>` and compare the PR's final head SHA (`gh pr view --json headRefOid`) with the branch tip. Delete (`-D`) only if the tip equals the merged PR head, or the maintainer authorizes it.
+   - Confirm a clean tree.
 
 ## 5. Security boundaries
 
@@ -41,23 +46,27 @@ Each slice has: one focused goal; explicit scope and exclusions; acceptance crit
 
 ## 6. Validation
 
-- Test before commit. Keep checks deterministic and non-mutating (no live SSH, no running setup scripts).
-- Baseline checks (mirror CI): `bash -n bin/jack scripts/*.sh`; executable bits; `./bin/jack --help`; `./bin/jack --status` and `./bin/jack bogus` exit non-zero; `shellcheck` when available.
-- Preserve backwards compatibility of commands and install/uninstall behavior.
-- Report static checks and live end-to-end checks separately. Without a real E2E run, state "no E2E". Report blocked and unverified items as such.
+- Canonical local check: `./scripts/dev-check.sh`. It is read-only, offline, deterministic, and runs on macOS (Bash 3.2) and Linux with no Tailscale, SSH, sudo, or Homebrew. It is also what CI runs.
+- Never run `scripts/setup-*.sh` to validate code (they install software, use sudo, edit shell files). Never run a live `jack --status`, `jack`, or `jack mac` as a required check: they touch the real tailnet and results depend on the machine.
+- Do not validate with `bash -n a b c`: Bash checks only the first file.
+- Keep checks deterministic; preserve backwards compatibility of commands and install/uninstall behavior.
+- Boundaries: CI is Ubuntu only. macOS behavior is verified by running `dev-check.sh` on a Mac and must be reported as such; do not claim macOS PASS without that run. Live end-to-end (real SSH over Tailscale) is separate from static checks; without it, state "no E2E". Report blocked and unverified items as such.
 
 ## 7. Failure and recovery
 
-- Stop on unexpected dirty trees or unexpected HEAD.
-- Never force-push `main`; never bypass required CI or branch protection.
-- No destructive cleanup (`reset --hard`, `clean`, branch deletion of unmerged work) without approval.
-- Preserve evidence (logs, failing run IDs).
-- Fix forward with a follow-up PR or an approved revert PR. If rules block completion, report BLOCKED.
+- Unexpected dirty tree, HEAD, or branch: stop and report; never reset, clean, or discard work.
+- Failed CI: fix on the same branch with a new commit, push, and wait for the check again. Keep the failing run ID as evidence.
+- Interrupted PR flow: inspect `git status`, the branch, and `gh pr view` before acting; resume from the first incomplete step.
+- Never force-push `main`. Never bypass required CI or branch protection (admins included; branch protection does not enforce this for admins, so it is a rule).
+- Revert a bad squash merge through a new branch and PR (`git revert <squash-sha>`), not a direct push to `main`.
+- Avoid destructive cleanup; preserve evidence. If rules block completion, report BLOCKED.
 
 ## 8. Evidence and history
 
-- Each slice gets a concise record `.ai/history/<slice>.md`: mission, baseline SHA, scope, files changed, validation, PR/CI outcome, final HEAD, remaining risks.
-- Use exact SHAs. Fill only values that exist; mark others `not recorded`. Never fabricate or predict verification.
+- Each slice gets a concise record `.ai/history/<slice>.md`, written before merge with only what exists then: mission, baseline SHA, scope, files changed, local validation, known risks.
+- Post-merge facts (PR, CI run, merge SHA, final HEAD) live in the GitHub PR, the Actions run, and the final report. Do not predict them in the file, and do not open a documentation-only PR just to back-fill them.
+- The next slice records the previous merge SHA as its baseline.
+- Use exact SHAs. Never fabricate verification.
 
 ## 9. Token efficiency
 
@@ -65,4 +74,4 @@ Read only relevant files; avoid repeated repo-wide scans; reuse prior evidence; 
 
 ## 10. Completion contract
 
-A slice is complete only when: implementation done; local validation done; CI green; PR merged; local `main` synchronized; working tree clean; final evidence reported.
+A slice is complete only when: implementation done; local validation done; CI green; PR merged; local `main` synchronized and equal to `origin/main`; working tree clean; final evidence reported.

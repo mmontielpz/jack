@@ -74,12 +74,15 @@ PATH entry). Homebrew, Tailscale, and SSH configuration are left untouched.
 
 ## Contributing
 
-Development workflow: [.ai/WORKFLOW.md](.ai/WORKFLOW.md)
+To work on the code, see [CONTRIBUTING.md](CONTRIBUTING.md) (validate with
+`./scripts/dev-check.sh`; the setup scripts above are for installing jack, not
+for validating changes) and the workflow in [.ai/WORKFLOW.md](.ai/WORKFLOW.md).
 
 ## Layout
 
 ```text
 bin/jack                     - the jack CLI
+scripts/dev-check.sh         - read-only contributor validation
 scripts/setup-macos.sh       - prepares the Mac client
 scripts/setup-workstation.sh - prepares the Linux workstation
 ```
