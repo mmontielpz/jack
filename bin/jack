@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Authoritative release identity; also used by doctor. No runtime Git dependency.
-readonly JACK_VERSION='0.1.0-rc.1'
+readonly JACK_VERSION='0.1.0'
 
 # Keep identity reporting independent of HOME, configuration and external tools.
 if [[ $# -eq 1 && "$1" == --version ]]; then

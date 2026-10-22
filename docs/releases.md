@@ -1,14 +1,15 @@
 # Planned release and version policy
 
-The current source identity is **0.1.0-rc.1**, a pre-release candidate identity
-for validation, not a published release or acceptance claim. No tag, GitHub
-release or package distribution is created by Slice 14B. See the
-[draft candidate notes](release-notes-0.1.0-rc.1.md).
+The prepared source identity is **0.1.0**, intended for a future `v0.1.0` tag.
+This is unpublished release preparation, not a release announcement, completed
+acceptance claim or authorization to publish. See the
+[stable release notes and acceptance evidence](release-notes-0.1.0.md).
+The [historical RC draft](release-notes-0.1.0-rc.1.md) remains unchanged.
 
 ## Authoritative identity
 
 `JACK_VERSION` in [bin/jack](../bin/jack) is the single authoritative version
-constant. `jack --version` prints `jack 0.1.0-rc.1` and exits 0 without reading
+constant. `jack --version` prints `jack 0.1.0` and exits 0 without reading
 configuration, writing files, querying Git or invoking network/dependency checks.
 It works without HOME or external commands; extra arguments are rejected.
 `jack doctor` uses the same constant. No companion VERSION file, runtime Git
