@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Authoritative release identity; also used by doctor. No runtime Git dependency.
+readonly JACK_VERSION='0.1.0-rc.1'
+
+# Keep identity reporting independent of HOME, configuration and external tools.
+if [[ $# -eq 1 && "$1" == --version ]]; then
+  printf 'jack %s\n' "${JACK_VERSION}"
+  exit 0
+fi
+
 readonly CONFIG_FILE="${HOME}/.config/jack/config"
 WORKSTATION_USER=""
 WORKSTATION_HOST=""
@@ -98,6 +107,7 @@ Usage:
   jack mac      Connect to Mac
   jack --status Show status
   jack doctor   Read-only first-run diagnostics (0 pass, 1 failure, 2 warnings)
+  jack --version Show version (no configuration or network access)
   jack --help   Show help
   jack setup    Guided destination configuration (see jack setup --help)
 
@@ -591,7 +601,7 @@ doctor_line() {
 
 cmd_doctor() {
   local doctor_fail=0 doctor_warn=0 os release line supported=0 parser_ok=0 state
-  doctor_line PASS 'JACK CLI: running (unversioned source build; no packaged release identity).'
+  doctor_line PASS "JACK CLI: running (${JACK_VERSION}; source checkout identity)."
   os="$(uname -s 2>/dev/null)" || os=Unknown
   case "${os}" in
     Darwin) doctor_line PASS 'Platform: macOS.' ;;

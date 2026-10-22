@@ -2,19 +2,19 @@
 
 ## Reporting a vulnerability
 
-**Private vulnerability reporting is not configured.** GitHub's private
-vulnerability reporting endpoint was verified disabled during Slice 12. No
-private security email or alternative verified channel is published by JACK.
-Do not send sensitive vulnerability details, exploit instructions, credentials,
-keys, or private tailnet diagnostics to public issues or pull requests.
+**GitHub private vulnerability reporting is enabled.** Report suspected
+vulnerabilities through [Report a vulnerability](https://github.com/mmontielpz/jack/security/advisories/new)
+while signed in to GitHub. Describe the affected JACK version/commit, impact and
+minimal reproduction privately. Redact credentials, keys, tokens and unnecessary
+private tailnet details even in private reports.
 
-The repository owner must enable GitHub private vulnerability reporting or
-publish a verified private contact before confidential reports can be accepted.
-Check the [repository security page](https://github.com/mmontielpz/jack/security)
-for an updated channel before sharing a report. Until one is explicitly available,
-withhold sensitive details; a public request to establish a reporting channel
-must contain no vulnerability details. This policy does not promise response
-times, a security audit, or support for a published release series.
+Do not send sensitive vulnerability details or exploit instructions to public
+issues or pull requests. No private security email is published by JACK. If the
+private form is unavailable, check the [repository security page](https://github.com/mmontielpz/jack/security)
+for current instructions and withhold sensitive details until a verified private
+channel is available. A public request to restore the channel must contain no
+vulnerability details. This policy promises no response SLA, security audit or
+support for a published release series.
 
 ## Trust boundary
 
