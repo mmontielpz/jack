@@ -191,6 +191,7 @@ main() {
   configure_path || path_needs_reload=1
 
   echo
+  echo "Configure destinations in ~/.config/jack/config (see config.example and README.md)."
   "${JACK_SRC}" --status || true
   echo
 

@@ -1,0 +1,6 @@
+# Illustrative values only: replace with your own SSH users and tailnet hosts.
+# Omit both keys for a destination you do not use. No quotes or inline comments.
+WORKSTATION_USER=alex
+WORKSTATION_HOST=workstation.example.ts.net
+MAC_USER=alex
+MAC_HOST=mac.example.ts.net

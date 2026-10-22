@@ -1,11 +1,93 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly WORKSTATION_USER="mike"
-readonly WORKSTATION_HOST="100.90.245.116"
+readonly CONFIG_FILE="${HOME}/.config/jack/config"
+WORKSTATION_USER=""
+WORKSTATION_HOST=""
+MAC_USER=""
+MAC_HOST=""
 
-readonly MAC_USER="mlopez"
-readonly MAC_HOST="100.76.175.55"
+config_error() {
+  echo "jack: $* (${CONFIG_FILE}). See config.example and jack --help." >&2
+  return 1
+}
+
+valid_user() {
+  local LC_ALL=C
+  [[ ${#1} -le 64 && "$1" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]
+}
+
+valid_host() {
+  local LC_ALL=C host="$1" part rest count=0
+  [[ -n "${host}" && ${#host} -le 253 ]] || return 1
+  # Numeric dotted hosts must be canonical IPv4, never ambiguous DNS names.
+  if [[ "${host}" =~ ^[0-9.]+$ ]]; then
+    rest="${host}"
+    while :; do
+      part="${rest%%.*}"
+      [[ "${part}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+      [[ "${part}" -le 255 ]] || return 1
+      count=$((count + 1))
+      [[ "${rest}" == *.* ]] || break
+      rest="${rest#*.}"
+    done
+    [[ "${count}" -eq 4 ]]
+    return
+  fi
+  rest="${host}"
+  while :; do
+    part="${rest%%.*}"
+    [[ ${#part} -ge 1 && ${#part} -le 63 ]] || return 1
+    [[ "${part}" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || return 1
+    [[ "${rest}" == *.* ]] || break
+    rest="${rest#*.}"
+  done
+}
+
+load_config() {
+  local line key value seen="|" number=0 nul
+  [[ -f "${CONFIG_FILE}" && -r "${CONFIG_FILE}" ]] || {
+    config_error "configuration file missing or unreadable"; return 1;
+  }
+  # Bash read otherwise silently discards NUL bytes. Reject before line parsing.
+  # shellcheck disable=SC2034
+  if IFS= read -r -d '' nul < "${CONFIG_FILE}"; then
+    config_error "NUL byte in configuration"; return 1
+  fi
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    number=$((number + 1))
+    [[ "${line}" =~ ^[[:blank:]]*(#.*)?$ ]] && continue
+    [[ "${line}" == *=* ]] || { config_error "malformed line ${number}"; return 1; }
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "${key}" in
+      WORKSTATION_USER|WORKSTATION_HOST|MAC_USER|MAC_HOST) ;;
+      *) config_error "unsupported key at line ${number}"; return 1 ;;
+    esac
+    case "${seen}" in
+      *"|${key}|"*) config_error "duplicate ${key} at line ${number}"; return 1 ;;
+    esac
+    seen="${seen}${key}|"
+    case "${key}" in
+      *_USER) valid_user "${value}" || { config_error "invalid ${key} at line ${number}"; return 1; } ;;
+      *_HOST) valid_host "${value}" || { config_error "invalid ${key} at line ${number}"; return 1; } ;;
+    esac
+    # Fixed assignments only: configuration never supplies a variable name to execute.
+    case "${key}" in
+      WORKSTATION_USER) WORKSTATION_USER="${value}" ;;
+      WORKSTATION_HOST) WORKSTATION_HOST="${value}" ;;
+      MAC_USER) MAC_USER="${value}" ;;
+      MAC_HOST) MAC_HOST="${value}" ;;
+    esac
+  done < "${CONFIG_FILE}"
+}
+
+require_device() {
+  if [[ -z "$2" || -z "$3" ]]; then
+    config_error "$1 unconfigured: set both $4_USER and $4_HOST"
+    return 1
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -16,6 +98,14 @@ Usage:
   jack mac      Connect to Mac
   jack --status Show status
   jack --help   Show help
+
+Configuration: $HOME/.config/jack/config
+Use literal KEY=VALUE lines (no quotes or shell syntax):
+  WORKSTATION_USER=alex
+  WORKSTATION_HOST=workstation.example.ts.net
+  MAC_USER=alex
+  MAC_HOST=mac.example.ts.net
+Set both keys for each destination you use. See config.example and README.md.
 
 Transport: Tailscale -> SSH
 EOF
@@ -60,20 +150,25 @@ require_tailscale() {
   fi
 }
 
-reachability() {
-  if ! check_tailscale_connected; then
-    echo "unknown"
-  elif check_reachable "$1"; then
-    echo "reachable"
+status_device() {
+  local label="$1" user="$2" host="$3"
+  if [[ -z "${user}" || -z "${host}" ]]; then
+    echo "${label}: unconfigured (set both $4_USER and $4_HOST)"
+    return 1
+  fi
+  if [[ "${tailscale_line}" != connected ]]; then
+    echo "${label}: configured ${user}@${host} — unknown"
+    return 1
+  elif check_reachable "${host}"; then
+    echo "${label}: configured ${user}@${host} — reachable"
   else
-    echo "not reachable"
+    echo "${label}: configured ${user}@${host} — unreachable"
+    return 1
   fi
 }
 
 cmd_status() {
-  local ok=0
-
-  local tailscale_line ssh_line
+  local ok=0 tailscale_line ssh_line
   if check_tailscale_connected; then
     tailscale_line="connected"
   elif check_tailscale_installed; then
@@ -83,44 +178,28 @@ cmd_status() {
     tailscale_line="not installed"
     ok=1
   fi
-
   if check_ssh; then
     ssh_line="available"
   else
     ssh_line="not installed"
     ok=1
   fi
-
-  cat <<EOF
-jack
-
-Tailscale: ${tailscale_line}
-
-Workstation:
-  ${WORKSTATION_USER}@${WORKSTATION_HOST} ($(reachability "${WORKSTATION_HOST}"))
-
-Mac:
-  ${MAC_USER}@${MAC_HOST} ($(reachability "${MAC_HOST}"))
-
-SSH: ${ssh_line}
-EOF
-  echo
-  if [[ "${ok}" -eq 0 ]]; then
-    echo "Ready."
-  else
-    echo "Not ready."
-  fi
-
+  echo "Tailscale: ${tailscale_line}"
+  status_device Workstation "${WORKSTATION_USER}" "${WORKSTATION_HOST}" WORKSTATION || ok=1
+  status_device Mac "${MAC_USER}" "${MAC_HOST}" MAC || ok=1
+  echo "SSH client: ${ssh_line}; authentication not tested."
   return "${ok}"
 }
 
 cmd_connect() {
+  require_device Workstation "${WORKSTATION_USER}" "${WORKSTATION_HOST}" WORKSTATION
   require_ssh
   require_tailscale
   exec ssh "${WORKSTATION_USER}@${WORKSTATION_HOST}"
 }
 
 cmd_mac() {
+  require_device Mac "${MAC_USER}" "${MAC_HOST}" MAC
   require_ssh
   require_tailscale
   if ! check_reachable "${MAC_HOST}"; then
@@ -142,12 +221,15 @@ main() {
       usage
       ;;
     --status)
+      load_config
       cmd_status
       ;;
     mac)
+      load_config
       cmd_mac
       ;;
     "")
+      load_config
       cmd_connect
       ;;
     *)

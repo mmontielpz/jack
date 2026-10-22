@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly REMOTE_USER="mike"
-readonly REMOTE_HOST="100.90.245.116"
-
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly JACK_SRC="${REPO_ROOT}/bin/jack"
@@ -166,12 +163,10 @@ main() {
   configure_path || path_needs_reload=1
 
   echo
+  echo "Configure destinations in ~/.config/jack/config (see config.example and README.md)."
   if [[ "${tailscale_ready}" -eq 0 ]]; then
     cat <<EOF
 jack installed.
-
-Workstation:
-  ${REMOTE_USER}@${REMOTE_HOST}
 
 Next:
 EOF
