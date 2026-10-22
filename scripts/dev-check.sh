@@ -515,6 +515,16 @@ check_setup_discovery_fallback() {
     untouched || ok=1
   done
   setup_reset
+  write_stub "${T}/bin-setup/python3" 'exit 1'
+  printf '%s\n' '{"BackendState":"Running"}' > "${T}/discovery-output"
+  printf 'mac\nmanual-mac\nalex\nyes\n' > "${T}/answers"
+  rc=0
+  out="$(setup_run < "${T}/answers" 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'Discovery unavailable'; then fail 'broken parser blocked manual setup'; ok=1; fi
+  discovery_expected $'MAC_USER=alex\nMAC_HOST=manual-mac'
+  untouched || ok=1
+  rm -f "${T}/bin-setup/python3"
+  setup_reset
   return "${ok}"
 }
 
@@ -553,13 +563,13 @@ check_discovery_selection() {
     setup_reset
     printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
     case "${role}" in
-      workstation) printf 'workstation\n1\nalex\nyes\n' > "${T}/answers" ;;
-      mac) printf 'mac\n2\nalex\nyes\n' > "${T}/answers" ;;
-      both) printf 'both\n1\nalex\n2\nsam\nyes\n' > "${T}/answers" ;;
+      workstation) printf 'workstation\na\n1\nalex\nyes\n' > "${T}/answers" ;;
+      mac) printf 'mac\na\n2\nalex\nyes\n' > "${T}/answers" ;;
+      both) printf 'both\na\n1\nalex\na\n2\nsam\nyes\n' > "${T}/answers" ;;
     esac
     rc=0
     out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
-    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '1) shared.example.ts.net — 100.64.1.3' || ! contains "${out}" '2) shared.example.ts.net — 100.64.1.20'; then
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '1) shared | Unknown | 100.64.1.3' || ! contains "${out}" '2) shared | Unknown | 100.64.1.20'; then
       fail "discovery selection ${role}: ${out}"; ok=1
     fi
     if contains "${out}" LOCAL-BY; then fail 'local device offered'; ok=1; fi
@@ -582,24 +592,24 @@ check_discovery_selection() {
   untouched || ok=1
   # Updating one role preserves the other and cancellation keeps exact bytes.
   set_config "${VALID_CONFIG}"
-  printf 'mac\n2\nsam\nno\n' > "${T}/answers"
+  printf 'mac\na\n2\nsam\nno\n' > "${T}/answers"
   rc=0
   out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
   [[ "${rc}" -ne 0 ]] || { fail 'discovery cancellation saved'; ok=1; }
   untouched || ok=1
-  printf 'mac\n2\nsam\nyes\n' > "${T}/answers"
+  printf 'mac\na\n2\nsam\nyes\n' > "${T}/answers"
   discovery_run < "${T}/answers" >/dev/null 2>&1 || { fail 'preserved destination setup'; ok=1; }
   discovery_expected $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.20'
   untouched || ok=1
   # Same peer for both roles requires its own consent before final confirmation.
   setup_reset
   printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
-  printf 'both\n1\nalex\n1\nsam\nno\n' > "${T}/answers"
+  printf 'both\na\n1\nalex\na\n1\nsam\nno\n' > "${T}/answers"
   rc=0
   out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'duplicate destination not confirmed'; then fail 'duplicate destination accepted'; ok=1; fi
   untouched || ok=1
-  printf 'both\n1\nalex\n1\nsam\nyes\nyes\n' > "${T}/answers"
+  printf 'both\na\n1\nalex\na\n1\nsam\nyes\nyes\n' > "${T}/answers"
   discovery_run < "${T}/answers" >/dev/null 2>&1 || { fail 'confirmed duplicate rejected'; ok=1; }
   discovery_expected $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.3\nMAC_USER=sam\nMAC_HOST=100.64.1.3'
   untouched || ok=1
@@ -646,14 +656,14 @@ check_discovery_untrusted() {
     "e":{"DNSName":{"unexpected":"object"},"TailscaleIPs":["100.64.1.6"]},
     "f":{"DNSName":"IPv6-only","TailscaleIPs":["fd7a::3"]}
   }}' > "${T}/discovery-output"
-  printf 'mac\n1\nalex\nyes\n' > "${T}/answers"
+  printf 'mac\na\n1\nalex\nyes\n' > "${T}/answers"
   rc=0
   out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
   [[ "${rc}" -eq 0 ]] || { fail 'unusual names rejected usable peers'; ok=1; }
   if contains "${out}" $'\033' || contains "${out}" $'\a' || contains "${out}" '$(' || contains "${out}" 'IPv6-only'; then fail 'unsafe display or IPv6 destination'; ok=1; fi
-  contains "${out}" '2) Unnamed peer — 100.64.1.4' || { fail 'null name handling'; ok=1; }
-  contains "${out}" '3) Multiple peers sharing address — 100.64.1.5' || { fail 'duplicate address handling'; ok=1; }
-  contains "${out}" '4) Unnamed peer — 100.64.1.6' || { fail 'unexpected name handling'; ok=1; }
+  contains "${out}" '2) Unnamed peer | Unknown | 100.64.1.4' || { fail 'null name handling'; ok=1; }
+  contains "${out}" '3) Multiple peers sharing address | Unknown | 100.64.1.5' || { fail 'duplicate address handling'; ok=1; }
+  contains "${out}" '4) Unnamed peer | Unknown | 100.64.1.6' || { fail 'unexpected name handling'; ok=1; }
   discovery_expected $'MAC_USER=alex\nMAC_HOST=100.64.1.2'
   untouched || ok=1
   # Invalid/out-of-range choices never default to the first peer.
@@ -687,6 +697,91 @@ check_discovery_untrusted() {
   untouched || ok=1
   rm -f "${T}/bin-setup/tailscale"
   mv "${T}/tailscale-tool" "${T}/bin-setup/tailscale"
+  setup_reset
+  rm -f "${T}/bin-discovery/python3"
+  return "${ok}"
+}
+
+DEVICE_AWARE_FIXTURE='{
+  "BackendState":"Running","Self":{"ID":"self","TailscaleIPs":["100.64.1.1"]},"Peer":{
+    "win":{"HostName":"office-win","OS":"windows","TailscaleIPs":["100.64.1.4"],"Online":true},
+    "legacy":{"DNSName":"legacy-mac.example.ts.net.","OS":"darwin","TailscaleIPs":["100.64.1.6"]},
+    "linux":{"HostName":"vpn-gateway","DNSName":"long-tailnet-name.example.ts.net.","OS":"linux","TailscaleIPs":["100.64.1.2"],"Online":false},
+    "unknown":{"HostName":"unknown-device","TailscaleIPs":["100.64.1.5"]},
+    "mac":{"HostName":"macbook","OS":"macOS","TailscaleIPs":["100.64.1.3"]},
+    "phone":{"HostName":"phone","OS":"android","TailscaleIPs":["100.64.1.7"]},
+    "bad":{"HostName":"bad\u001b[31m\u0007\n$(id)","OS":"linux\u001b[31m$(id)","TailscaleIPs":["100.64.1.8"]},
+    "duplicate-name":{"HostName":"vpn-gateway","OS":"linux","TailscaleIPs":["100.64.1.20"]},
+    "duplicate-ip-linux":{"HostName":"ambiguous-linux","OS":"linux","TailscaleIPs":["100.64.1.9"]},
+    "duplicate-ip-mac":{"HostName":"ambiguous-mac","OS":"macOS","TailscaleIPs":["100.64.1.9"]},
+    "self":{"ID":"self","HostName":"LOCAL-DEVICE","OS":"macOS","TailscaleIPs":["100.64.1.1"]}
+  }}'
+
+check_device_aware() {
+  link_tool "${T}/bin-discovery" python3 || return 1
+  local scenario out rc expected ok=0
+  for scenario in workstation mac legacy show-all decline windows unknown manual manual-mismatch both malicious ambiguous automation; do
+    setup_reset
+    set_config "${VALID_CONFIG}"
+    printf '%s\n' "${DEVICE_AWARE_FIXTURE}" > "${T}/discovery-output"
+    expected="${VALID_CONFIG}"
+    case "${scenario}" in
+      workstation) printf 'workstation\n1\nalex\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.2\nMAC_USER=alex\nMAC_HOST=mac.example.ts.net' ;;
+      mac) printf 'mac\n1\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.3' ;;
+      legacy) printf 'mac\n2\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.6' ;;
+      show-all) printf 'mac\na\n1\nyes\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.2' ;;
+      decline) printf 'mac\na\n1\nno\n' > "${T}/answers" ;;
+      windows) printf 'workstation\na\n3\nyes\nalex\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.4\nMAC_USER=alex\nMAC_HOST=mac.example.ts.net' ;;
+      unknown) printf 'mac\na\n4\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.5' ;;
+      manual) printf 'mac\n0\nmanual-mac\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=manual-mac' ;;
+      manual-mismatch) printf 'mac\n0\n100.64.1.2\nno\n' > "${T}/answers" ;;
+      both) printf 'both\n1\nalex\n1\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.2\nMAC_USER=sam\nMAC_HOST=100.64.1.3' ;;
+      malicious) printf 'mac\na\n7\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.8' ;;
+      ambiguous) printf 'mac\na\n8\nsam\nyes\n' > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.9' ;;
+      automation) : > "${T}/answers"; expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.2' ;;
+    esac
+    rc=0
+    if [[ "${scenario}" == automation ]]; then
+      out="$(discovery_run --non-interactive --yes --mac-user sam --mac-host 100.64.1.2 < /dev/null 2>&1)" || rc=$?
+    else
+      out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+    fi
+    case "${scenario}" in
+      decline|manual-mismatch)
+        if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'OS mismatch not confirmed'; then fail "${scenario} did not cancel"; ok=1; fi ;;
+      *) [[ "${rc}" -eq 0 ]] || { fail "${scenario}: ${out}"; ok=1; } ;;
+    esac
+    discovery_expected "${expected}"
+    untouched || ok=1
+    if contains "${out}" $'\033' || contains "${out}" $'\a' || contains "${out}" '$(' || contains "${out}" LOCAL-DEVICE; then fail 'unsafe or local metadata display'; ok=1; fi
+    case "${scenario}" in
+      workstation)
+        if ! contains "${out}" '1) vpn-gateway | Linux | 100.64.1.2' || ! contains "${out}" '2) vpn-gateway | Linux | 100.64.1.20' || contains "${out}" '1) macbook' || contains "${out}" 'office-win |'; then fail 'Linux recommendation/short-name order'; ok=1; fi ;;
+      mac|legacy)
+        if ! contains "${out}" '1) macbook | macOS | 100.64.1.3' || ! contains "${out}" '2) legacy-mac | macOS | 100.64.1.6' || contains "${out}" 'vpn-gateway |'; then fail 'macOS recommendation'; ok=1; fi ;;
+      show-all|decline|manual-mismatch)
+        contains "${out}" 'Warning: this device reports Linux; macOS is recommended for Mac.' || { fail 'Mac/Linux mismatch warning'; ok=1; } ;;
+      windows)
+        if ! contains "${out}" '3) office-win | Windows | 100.64.1.4' || ! contains "${out}" 'Warning: this device reports Windows; Linux is recommended for Workstation.'; then fail 'Windows advisory'; ok=1; fi ;;
+      unknown|manual|malicious|ambiguous)
+        if ! contains "${out}" 'OS: Unknown; compatibility is unverified.' || contains "${out}" Warning:; then fail 'unknown OS warning behavior'; ok=1; fi ;;
+    esac
+    if [[ "${scenario}" == automation ]]; then
+      [[ ! -s "${T}/ts.log" ]] || { fail 'automation discovered devices'; ok=1; }
+      contains "${out}" Warning: && { fail 'automation prompted for OS'; ok=1; }
+    else
+      [[ "$(cat "${T}/ts.log")" == 'status --json' ]] || { fail 'unexpected discovery/probe'; ok=1; }
+    fi
+  done
+  # No matching peers still offers show-all and manual entry in the same prompt.
+  setup_reset
+  printf '%s\n' '{"BackendState":"Running","TailscaleIPs":["100.64.1.1"],"Peer":{"w":{"HostName":"win-only","OS":"windows","TailscaleIPs":["100.64.1.4"]}}}' > "${T}/discovery-output"
+  printf 'mac\na\n1\nyes\nsam\nyes\n' > "${T}/answers"
+  rc=0
+  out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'No devices reporting macOS found' || ! contains "${out}" 'a) Show all devices' || ! contains "${out}" '0) Enter an address manually'; then fail 'no-match recovery'; ok=1; fi
+  discovery_expected $'MAC_USER=sam\nMAC_HOST=100.64.1.4'
+  untouched || ok=1
   setup_reset
   rm -f "${T}/bin-discovery/python3"
   return "${ok}"
@@ -745,9 +840,11 @@ run_check SETUP_DISCOVERY_FALLBACK check_setup_discovery_fallback
 if command -v python3 >/dev/null 2>&1; then
   run_check DISCOVERY_SELECTION check_discovery_selection
   run_check DISCOVERY_UNTRUSTED check_discovery_untrusted
+  run_check DEVICE_AWARE check_device_aware
 else
   echo 'DISCOVERY_SELECTION=SKIP (optional Python 3 unavailable)'
   echo 'DISCOVERY_UNTRUSTED=SKIP (fallback tested; full discovery not verified)'
+  echo 'DEVICE_AWARE=SKIP (optional Python 3 unavailable)'
 fi
 run_check INSTALLER_REFUSAL check_installer_refusal
 
