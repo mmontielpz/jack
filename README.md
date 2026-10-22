@@ -1,5 +1,7 @@
 # JACK
 
+![JACK — J-shaped audio cable symbol and wordmark](assets/brand/logo.svg)
+
 JACK is a minimal CLI for reaching your own devices over Tailscale and SSH.
 
 - Connect to a primary remote destination with `jack`, or a Mac with `jack mac`.
@@ -51,7 +53,7 @@ when a destination is unused or unreachable, even if the other is usable.
 - [Contributing](CONTRIBUTING.md): offline checks, bugs, proposals and pull requests.
 - [Planned release policy](docs/releases.md): versioning and acceptance checklist;
   no published release or package distribution is provided.
-- [Future visual identity brief](docs/branding.md): requirements, not shipped assets.
+- [Brand guidelines](docs/branding.md): vector assets, palette, provenance and usage.
 
 ## License
 

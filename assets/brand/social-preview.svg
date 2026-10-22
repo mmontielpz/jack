@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">JACK — Just Connect.</title>
+  <desc id="description">JACK J-shaped audio connector and wordmark on graphite, with the tagline Just Connect.</desc>
+  <rect width="1280" height="640" fill="#181A1D"/>
+  <g transform="translate(146 130) scale(1.3)">
+  <g id="mark">
+    <path d="M170 122V166C170 198 150 218 122 218S76 200 76 176" fill="none" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round"/>
+    <path d="M162 76V38L166 28H174L178 38V76Z" fill="#FFFFFF"/>
+    <path d="M162 48H178M162 60H178" fill="none" stroke="#181A1D" stroke-width="4"/>
+    <rect x="156" y="72" width="28" height="12" rx="3" fill="#FFFFFF"/>
+    <rect x="150" y="80" width="40" height="46" rx="8" fill="#FF6B00"/>
+  </g>
+  <g id="wordmark" transform="translate(280 80) scale(1.18)" fill="#FFFFFF">
+    <path d="M0 0H72V62Q72 96 38 96H28Q0 96 0 68V58H22V66Q22 76 32 76H38Q50 76 50 62V20H0Z"/>
+    <path fill-rule="evenodd" d="M88 96L118 0H148L178 96H154L148 74H118L112 96ZM124 54H142L133 22Z"/>
+    <path d="M266 0V22H224Q212 22 212 34V62Q212 74 224 74H266V96H222Q190 96 190 64V32Q190 0 222 0Z"/>
+    <path d="M284 0H306V37L338 0H366L324 47L368 96H338L306 59V96H284Z"/>
+  </g>
+  </g>
+  <g id="tagline" transform="translate(510 422) scale(1.4)" fill="none" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+    <path transform="translate(0 0)" d="M0 0H20V24Q20 34 10 34Q0 34 0 24"/><path transform="translate(24 0)" d="M0 10V26Q0 34 8 34Q16 34 16 26V10M16 26V34"/><path transform="translate(46 0)" d="M16 12Q0 6 0 17Q0 22 8 22Q16 22 16 28Q16 38 0 32"/><path transform="translate(68 0)" d="M8 0V26Q8 34 16 34M0 10H16"/><path transform="translate(104 0)" d="M24 2Q0 -6 0 17Q0 40 24 32"/><path transform="translate(134 0)" d="M9 10Q0 10 0 22Q0 34 9 34Q18 34 18 22Q18 10 9 10Z"/><path transform="translate(158 0)" d="M0 34V10M0 20Q0 10 9 10Q18 10 18 20V34"/><path transform="translate(182 0)" d="M0 34V10M0 20Q0 10 9 10Q18 10 18 20V34"/><path transform="translate(206 0)" d="M0 22H18Q18 10 9 10Q0 10 0 22Q0 34 10 34H18"/><path transform="translate(230 0)" d="M17 12Q0 4 0 22Q0 40 17 32"/><path transform="translate(253 0)" d="M8 0V26Q8 34 16 34M0 10H16"/><path transform="translate(275 0)" d="M2 32V33"/>
+  </g>
+</svg>

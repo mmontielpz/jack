@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">JACK monochrome mark</title>
+  <desc id="description">A graphite J-shaped cable and audio plug on a transparent background. Use on white.</desc>
+  <g id="mark">
+    <path d="M170 122V166C170 198 150 218 122 218S76 200 76 176" fill="none" stroke="#181A1D" stroke-width="20" stroke-linecap="round"/>
+    <path d="M162 76V38L166 28H174L178 38V76Z" fill="#181A1D"/>
+    <path d="M162 48H178M162 60H178" fill="none" stroke="#FFFFFF" stroke-width="4"/>
+    <rect x="156" y="72" width="28" height="12" rx="3" fill="#181A1D"/>
+    <rect x="150" y="80" width="40" height="46" rx="8" fill="#181A1D"/>
+  </g>
+</svg>
