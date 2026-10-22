@@ -16,6 +16,36 @@ Canonical, lightweight workflow for humans and AI agents working on JACK. Contri
 - No autonomous roadmap expansion. A recommendation is not authorization.
 - No architecture changes (transport, language, new runtime dependencies) without approval.
 
+## 2A. Autonomous Execution Policy
+
+An approved slice authorizes routine end-to-end execution within its scope, acceptance criteria, and security boundaries. The Product Owner retains those decisions; the agent owns routine implementation, testing, documentation, and authorized delivery. This policy applies equally to Claude Code, Codex, and other engineering agents; all existing workflow rules still apply.
+
+### A. AUTONOMOUS — no Product Owner confirmation
+
+- Read files and inspect repository history; make reversible implementation choices within approved scope.
+- Create feature branches and edit authorized repository files.
+- Run offline checks, fix ordinary test failures, and update documentation and slice history.
+- Commit and push the approved slice; create its PR, monitor required CI, and resolve routine failures on the same branch.
+- Enable auto-merge and squash-merge after required checks PASS, only when explicitly authorized by the approved slice and permitted by repository policy. Never use admin privileges to bypass gates.
+- Clean up merged feature branches using the verification and branch-tip checks in section 4.
+
+### B. ASK OR STOP — Product Owner decision required
+
+- Material changes to scope, architecture, or acceptance criteria; unresolved ambiguity that materially changes product behavior.
+- Authentication, permissions, credentials, or security-posture changes outside the approved slice.
+- Destructive operations or risk of losing existing user work; unexpected infrastructure changes or production actions.
+- Irreversible actions not explicitly authorized; required CI or authorization gates that cannot be satisfied.
+
+### C. NEVER
+
+- Bypass required CI, branch protection, or security controls; disable security mechanisms to avoid approval prompts.
+- Expose secrets or private credentials; claim PASS without verification.
+- Force-push protected branches; delete unmerged work; silently expand scope.
+
+Prefer safe defaults and reversible decisions. Do not interrupt for implementation details already delegated. Fix routine failures independently within reasonable bounds; ask one focused question only when genuinely blocked on a Product Owner decision. Report PARTIAL with evidence rather than guessing; retain the existing failure, stopping, and completion rules.
+
+Codex permission prompts are controlled by its own sandbox and approval settings, not this repository workflow. Repository authorization does not override those controls. Do not edit global user settings (including `~/.codex/config.toml`), recommend unrestricted access, or bypass approvals to implement this policy.
+
 ## 3. Slice contract
 
 Each slice has: one focused goal; explicit scope and exclusions; acceptance criteria; required verification evidence; stopping conditions. Pass only when the active slice's acceptance is demonstrated. Work outside scope is reported as a follow-up, not done. Stop after the final report; do not start the next slice.
