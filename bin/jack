@@ -97,6 +97,7 @@ Usage:
   jack          Connect to workstation
   jack mac      Connect to Mac
   jack --status Show status
+  jack doctor   Read-only first-run diagnostics (0 pass, 1 failure, 2 warnings)
   jack --help   Show help
   jack setup    Guided destination configuration (see jack setup --help)
 
@@ -133,7 +134,7 @@ check_reachable() {
 
 require_ssh() {
   if ! check_ssh; then
-    echo "jack: ssh is not installed" >&2
+    echo "jack: ssh is not installed; run jack doctor for prerequisites" >&2
     exit 1
   fi
 }
@@ -141,7 +142,7 @@ require_ssh() {
 require_tailscale() {
   if ! check_tailscale_installed; then
     echo "jack: Tailscale is not installed" >&2
-    echo "Run: ./scripts/setup-macos.sh (Mac) or ./scripts/setup-workstation.sh (Linux)" >&2
+    echo "Install Tailscale separately, then run jack doctor (see README.md)." >&2
     exit 1
   fi
 
@@ -383,6 +384,12 @@ try:
         raise ValueError("oversized status")
     status = json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
                         parse_constant=reject_constant)
+    if sys.argv[1] == "state":
+        state = status.get("BackendState") if isinstance(status, dict) else None
+        if state not in ("Running", "Stopped", "Starting", "NeedsLogin", "NeedsMachineAuth", "NoState"):
+            raise ValueError("unknown state")
+        print(state)
+        sys.exit(0)
     if not isinstance(status, dict) or status.get("BackendState") != "Running":
         raise ValueError("not running")
     local = status.get("Self") or {}
@@ -414,7 +421,7 @@ try:
         print("{}\t{}\t{}".format(ip, name, os_label))
 except (ValueError, TypeError, RecursionError, OverflowError):
     sys.exit(1)
-'
+' "${1:-peers}"
 }
 
 setup_discover() {
@@ -576,6 +583,76 @@ cmd_setup() {
   echo 'Reachability is not SSH authorization. Setup did not test an SSH session.'
 }
 
+doctor_line() {
+  printf '%s %s\n' "$1" "$2"
+  case "$1" in FAIL) doctor_fail=1 ;; WARN) doctor_warn=1 ;; esac
+}
+
+cmd_doctor() {
+  local doctor_fail=0 doctor_warn=0 os release line supported=0 parser_ok=0 state
+  doctor_line PASS 'JACK CLI: running (unversioned source build; no packaged release identity).'
+  os="$(uname -s 2>/dev/null)" || os=Unknown
+  case "${os}" in
+    Darwin) doctor_line PASS 'Platform: macOS.' ;;
+    Linux)
+      release="$(cat /etc/os-release 2>/dev/null)" || release=''
+      while IFS= read -r line; do
+        case "${line}" in ID=arch|ID=cachyos|'ID="arch"'|'ID="cachyos"') supported=1 ;; esac
+      done <<< "${release}"
+      if [[ "${supported}" -eq 1 ]]; then
+        doctor_line PASS 'Platform: Arch Linux/CachyOS.'
+      else
+        doctor_line FAIL 'Platform: Linux distribution unverified/unsupported; supported installer targets Arch/CachyOS. See README.'
+      fi ;;
+    *) doctor_line FAIL 'Platform: unsupported or undetectable; use macOS or Arch/CachyOS.' ;;
+  esac
+  if command -v python3 >/dev/null 2>&1 && python3 -I -B -c 'import json, ipaddress' >/dev/null 2>&1; then
+    parser_ok=1
+    doctor_line PASS 'Discovery: optional Python 3 parser available.'
+  else
+    doctor_line WARN 'Discovery: optional Python 3 unavailable/broken; manual jack setup still works.'
+  fi
+  if check_tailscale_installed; then
+    doctor_line PASS 'Tailscale CLI: available.'
+    if [[ "${parser_ok}" -eq 1 ]]; then
+      if state="$(tailscale status --json 2>/dev/null | discovery_parse state 2>/dev/null)"; then
+        case "${state}" in
+          Running) doctor_line PASS 'Tailscale daemon: Running; peer reachability and SSH authentication untested.' ;;
+          *) doctor_line FAIL 'Tailscale daemon: not connected/approved. Open Tailscale, connect/approve it, and rerun jack doctor.' ;;
+        esac
+      else
+        doctor_line FAIL 'Tailscale daemon/status: unavailable or malformed. Check the Tailscale app/daemon and rerun jack doctor.'
+      fi
+    elif tailscale status --peers=false --self=false >/dev/null 2>&1; then
+      doctor_line WARN 'Tailscale daemon: running or starting; exact state unverified without optional parser. Check the Tailscale app.'
+    else
+      doctor_line FAIL 'Tailscale daemon: unavailable/disconnected. Open/start Tailscale separately and rerun jack doctor.'
+    fi
+  else
+    doctor_line FAIL 'Tailscale CLI: missing. Install Tailscale separately for your supported OS; see README.'
+  fi
+  if check_ssh; then
+    doctor_line PASS 'SSH client: available; authentication not tested.'
+  else
+    doctor_line FAIL 'SSH client: missing. Install OpenSSH client separately; see README.'
+  fi
+  if [[ ! -e "${CONFIG_FILE}" ]]; then
+    doctor_line FAIL 'Configuration: missing. Run jack setup (manual entry requires no Python).'
+  elif ! load_config >/dev/null 2>&1; then
+    doctor_line FAIL 'Configuration: invalid/unreadable. Review the four-key format in config.example; setup will not overwrite malformed config.'
+  elif [[ -n "${WORKSTATION_USER}" && -n "${WORKSTATION_HOST}" && -n "${MAC_USER}" && -n "${MAC_HOST}" ]]; then
+    doctor_line PASS 'Configuration: valid; both destinations configured (values omitted).'
+  elif [[ ( -n "${WORKSTATION_USER}" && -n "${WORKSTATION_HOST}" ) || ( -n "${MAC_USER}" && -n "${MAC_HOST}" ) ]]; then
+    doctor_line WARN 'Configuration: valid; one destination incomplete/unused. Run jack setup if you need the other destination.'
+  else
+    doctor_line FAIL 'Configuration: no complete destination. Run jack setup.'
+  fi
+  echo 'Doctor is read-only; no peers were probed and no SSH session was attempted.'
+  [[ "${doctor_fail}" -eq 0 ]] || return 1
+  [[ "${doctor_warn}" -eq 0 ]] || return 2
+  return 0
+}
+
 main() {
   if [[ "${1:-}" == setup ]]; then
     shift
@@ -591,6 +668,9 @@ main() {
   case "${1:-}" in
     --help|-h)
       usage
+      ;;
+    doctor)
+      cmd_doctor
       ;;
     --status)
       load_config

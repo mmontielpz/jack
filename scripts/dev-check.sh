@@ -48,7 +48,7 @@ TRIPWIRE='printf "%s\n" "${0##*/} $*" >> "${STUB_LOG:-/dev/null}"; exit 99'
 
 make_fixtures() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/jack-dev-check.XXXXXX")" || return 1
-  mkdir "${T}/home" "${T}/expected-home" "${T}/bin-setup" "${T}/bin-discovery" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
+  mkdir "${T}/home" "${T}/expected-home" "${T}/bin-setup" "${T}/bin-discovery" "${T}/bin-doctor" "${T}/bin-install" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
   : > "${T}/calls.log"
   : > "${T}/ts.log"
   : > "${T}/ssh.log"
@@ -87,6 +87,31 @@ exit 1'
     ln -s "${n}" "${T}/bin-discovery/${n##*/}"
   done
 
+  for d in bin-doctor bin-install; do
+    for n in cat grep dirname find mkdir ln readlink rm; do link_tool "${T}/${d}" "${n}" || return 1; done
+    for n in ssh sudo brew pacman systemctl launchctl; do write_stub "${T}/${d}/${n}" "${TRIPWIRE}"; done
+    write_stub "${T}/${d}/uname" 'printf "%s\n" "${FAKE_OS}"'
+  done
+  ln -s "$(command -v cat)" "${T}/bin-doctor/cat-real"
+  rm -f "${T}/bin-doctor/cat"
+  write_stub "${T}/bin-doctor/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=%s\n" "${DOCTOR_DISTRO}"; else exec "${0%/*}/cat-real" "$@"; fi'
+  rm -f "${T}/bin-install/cat"
+  ln -s "$(command -v cat)" "${T}/bin-install/cat-real"
+  write_stub "${T}/bin-install/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=%s\n" "${DOCTOR_DISTRO}"; else exec "${0%/*}/cat-real" "$@"; fi'
+  write_stub "${T}/bin-doctor/tailscale" 'printf "%s\n" "$*" >> "${TS_LOG}"
+if [ "$1" != status ]; then exit 99; fi
+if [ "${DOCTOR_STATE}" = invalid ]; then printf "invalid status"; exit 0; fi
+printf "{\"BackendState\":\"%s\"}\n" "${DOCTOR_STATE}"
+[ "${DOCTOR_STATE}" = Running ] || [ "$2" = --json ]'
+  if command -v python3 >/dev/null 2>&1; then
+    link_tool "${T}/bin-doctor" python3 || return 1
+  else
+    echo 'DOCTOR_PARSER=STUB (optional Python absent; state parsing simulated)'
+    # Deterministic state-parser contract when the optional real parser is absent.
+    write_stub "${T}/bin-doctor/python3" 'case "$*" in *"import json, ipaddress"*) exit 0 ;; esac
+case "${DOCTOR_STATE}" in invalid) exit 1 ;; *) printf "%s\n" "${DOCTOR_STATE}" ;; esac'
+  fi
+
   # Installer fixtures: fake OS name, tripwires for anything that would mutate.
   for d in bin-linux bin-darwin bin-nopacman; do
     link_tool "${T}/${d}" dirname || return 1
@@ -107,7 +132,7 @@ run_iso() { # pathdir command args...
   local p="$1"
   shift
   env -i HOME="${T}/home" PATH="${p}" TERM=dumb STUB_LOG="${T}/calls.log" \
-    DISCOVERY_OUTPUT="${T}/discovery-output" LC_ALL=C SSH_LOG="${T}/ssh.log" TS_PING_RC="${TS_PING_RC}" \
+    DOCTOR_DISTRO="${DOCTOR_DISTRO:-arch}" DOCTOR_STATE="${DOCTOR_STATE:-Running}" DISCOVERY_OUTPUT="${T}/discovery-output" LC_ALL=C SSH_LOG="${T}/ssh.log" TS_PING_RC="${TS_PING_RC}" \
     TS_LOG="${T}/ts.log" TS_STATE="${TS_STATE}" FAKE_OS="${FAKE_OS}" "${BASH}" "$@"
 }
 
@@ -787,6 +812,138 @@ check_device_aware() {
   return "${ok}"
 }
 
+doctor_run() {
+  run_iso "${T}/bin-doctor" "${JACK}" doctor "$@"
+}
+
+check_doctor() {
+  local scenario out rc expected ok=0
+  for scenario in mac arch cachyos mixed-failure unsupported missing-tailscale stopped malformed-status no-ssh no-python broken-python missing-config malformed-config valid-config partial-config; do
+    setup_reset
+    set_config "${VALID_CONFIG}"
+    FAKE_OS=Linux
+    DOCTOR_DISTRO=arch
+    DOCTOR_STATE=Running
+    expected=0
+    case "${scenario}" in
+      mac) FAKE_OS=Darwin ;;
+      cachyos) DOCTOR_DISTRO=cachyos ;;
+      mixed-failure) DOCTOR_STATE=Stopped; mv "${T}/bin-doctor/python3" "${T}/doctor-python"; expected=1 ;;
+      unsupported) DOCTOR_DISTRO=ubuntu; expected=1 ;;
+      missing-tailscale) mv "${T}/bin-doctor/tailscale" "${T}/doctor-tail"; expected=1 ;;
+      stopped) DOCTOR_STATE=Stopped; expected=1 ;;
+      malformed-status) DOCTOR_STATE=invalid; expected=1 ;;
+      no-ssh) mv "${T}/bin-doctor/ssh" "${T}/doctor-ssh"; expected=1 ;;
+      no-python) mv "${T}/bin-doctor/python3" "${T}/doctor-python"; expected=2 ;;
+      broken-python) mv "${T}/bin-doctor/python3" "${T}/doctor-python"; write_stub "${T}/bin-doctor/python3" 'exit 1'; expected=2 ;;
+      missing-config) clear_config; expected=1 ;;
+      malformed-config) set_config 'MAC_USER=$(printf secret > "$HOME/leak")'; expected=1 ;;
+      partial-config) set_config $'MAC_USER=alex\nMAC_HOST=mac.example.ts.net'; expected=2 ;;
+    esac
+    rc=0
+    out="$(doctor_run 2>&1)" || rc=$?
+    if [[ "${rc}" -ne "${expected}" ]]; then fail "doctor ${scenario}: rc=${rc}, ${out}"; ok=1; fi
+    contains "${out}" 'Doctor is read-only' || { fail 'doctor did not finish checks'; ok=1; }
+    if contains "${out}" 'secret' || contains "${out}" '100.101.102.103' || contains "${out}" 'mac.example.ts.net'; then fail 'doctor disclosed config values'; ok=1; fi
+    [[ ! -e "${T}/home/leak" ]] || { fail 'doctor executed config'; ok=1; }
+    untouched || ok=1
+    case "${scenario}" in
+      missing-tailscale) mv "${T}/doctor-tail" "${T}/bin-doctor/tailscale" ;;
+      no-ssh) mv "${T}/doctor-ssh" "${T}/bin-doctor/ssh" ;;
+      no-python|mixed-failure) mv "${T}/doctor-python" "${T}/bin-doctor/python3" ;;
+      broken-python) rm -f "${T}/bin-doctor/python3"; mv "${T}/doctor-python" "${T}/bin-doctor/python3" ;;
+    esac
+  done
+  setup_reset
+  FAKE_OS=Linux
+  DOCTOR_DISTRO=arch
+  DOCTOR_STATE=Running
+  rc=0
+  out="$(doctor_run extra 2>&1)" || rc=$?
+  [[ "${rc}" -eq 1 ]] || { fail 'doctor accepted extra arguments'; ok=1; }
+  untouched || ok=1
+  return "${ok}"
+}
+
+check_installer_safety() {
+  local script out rc ok=0
+  for script in setup-macos.sh setup-workstation.sh; do
+    setup_reset
+    if [[ "${script}" == setup-macos.sh ]]; then FAKE_OS=Darwin; else FAKE_OS=Linux; fi
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" <<< no 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'installer ignored declined consent'; ok=1; }
+    untouched || ok=1
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" < /dev/null 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'installer accepted EOF consent'; ok=1; }
+    untouched || ok=1
+    # Preserve existing profile/config/key data through install, repeat, uninstall.
+    set_config "${VALID_CONFIG}"
+    mkdir -p "${T}/home/.ssh" "${T}/expected-home/.ssh"
+    printf 'user-managed key sentinel\n' > "${T}/home/.ssh/key"
+    cp "${T}/home/.ssh/key" "${T}/expected-home/.ssh/key"
+    printf 'user-managed profile\nexport PATH="$HOME/.local/bin:$PATH"\n' > "${T}/home/.profile"
+    cp "${T}/home/.profile" "${T}/expected-home/.profile"
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" <<< yes 2>&1)" || rc=$?
+    [[ "${rc}" -eq 0 ]] || { fail "installer ${script}: ${out}"; ok=1; }
+    mkdir -p "${T}/expected-home/.local/bin"
+    ln -s "${JACK}" "${T}/expected-home/.local/bin/jack"
+    untouched || ok=1
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" < /dev/null 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'already linked'; then fail 'repeat installer not idempotent'; ok=1; fi
+    untouched || ok=1
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" --uninstall <<< no 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'uninstall ignored declined consent'; ok=1; }
+    untouched || ok=1
+    run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" --uninstall <<< yes > /dev/null 2>&1 || ok=1
+    rm -f "${T}/expected-home/.local/bin/jack"
+    untouched || ok=1
+    # An unrelated regular file and unrelated symlink must never be replaced.
+    printf 'user managed command\n' > "${T}/home/.local/bin/jack"
+    cp "${T}/home/.local/bin/jack" "${T}/expected-home/.local/bin/jack"
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" <<< yes 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'installer overwrote unrelated command'; ok=1; }
+    untouched || ok=1
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" --uninstall <<< yes 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'uninstaller deleted unrelated command'; ok=1; }
+    untouched || ok=1
+    rm -f "${T}/home/.local/bin/jack" "${T}/expected-home/.local/bin/jack"
+    ln -s "${T}/unrelated-command" "${T}/home/.local/bin/jack"
+    ln -s "${T}/unrelated-command" "${T}/expected-home/.local/bin/jack"
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" <<< yes 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'installer overwrote unrelated link'; ok=1; }
+    # diff follows symlinks; give the unrelated target a harmless fixture value.
+    printf 'unrelated\n' > "${T}/unrelated-command"
+    untouched || ok=1
+    rm -rf "${T}/home/.local" "${T}/expected-home/.local" "${T}/home/.ssh" "${T}/expected-home/.ssh"
+    rm -f "${T}/home/.profile" "${T}/expected-home/.profile"
+    mkdir -p "${T}/installer-other"
+    ln -s "${T}/installer-other" "${T}/home/.local"
+    ln -s "${T}/installer-other" "${T}/expected-home/.local"
+    rc=0
+    out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/${script}" <<< yes 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 && ! -e "${T}/installer-other/bin" ]] || { fail 'installer followed symlink directory'; ok=1; }
+    untouched || ok=1
+    rm -f "${T}/home/.local" "${T}/expected-home/.local"
+  done
+  setup_reset
+  FAKE_OS=Linux
+  DOCTOR_DISTRO=ubuntu
+  rc=0
+  out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/setup-workstation.sh" <<< yes 2>&1)" || rc=$?
+  [[ "${rc}" -ne 0 ]] || { fail 'installer accepted unsupported Linux'; ok=1; }
+  untouched || ok=1
+  DOCTOR_DISTRO=arch
+  return "${ok}"
+}
+
 installer_refuses() { # label pathdir os script expected-text
   local out rc=0
   FAKE_OS="$3"
@@ -846,6 +1003,8 @@ else
   echo 'DISCOVERY_UNTRUSTED=SKIP (fallback tested; full discovery not verified)'
   echo 'DEVICE_AWARE=SKIP (optional Python 3 unavailable)'
 fi
+run_check DOCTOR check_doctor
+run_check INSTALLER_SAFETY check_installer_safety
 run_check INSTALLER_REFUSAL check_installer_refusal
 
 if command -v shellcheck >/dev/null 2>&1; then

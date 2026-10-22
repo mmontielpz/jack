@@ -1,6 +1,8 @@
 # jack
 
-`jack` lets you securely jump between your Mac and your Linux workstation.
+`jack` provides SSH access between macOS and an Arch Linux/CachyOS workstation.
+These are the supported installation targets; other Linux distributions and
+Windows are not supported installation paths.
 
 ```text
 Mac         → jack     → Tailscale → Tailscale SSH           → Workstation
@@ -13,6 +15,7 @@ After [installing JACK](#install-on-mac) on macOS or
 [Arch/CachyOS](#install-on-the-workstation-arch--cachyos), run:
 
 ```bash
+jack doctor   # diagnose first; follow any next actions
 jack setup
 jack --status
 jack          # workstation
@@ -191,26 +194,100 @@ file manually) and explicitly enter your own accounts and addresses before using
 `jack mac`. Installers do not create or migrate configuration. Uninstall leaves
 your configuration in place. Missing configuration never connects anywhere.
 
+## Install from a source checkout
+
+Required for remote connections: Bash (macOS system Bash 3.2 supported), an
+OpenSSH client, and the Tailscale CLI with an authenticated, running daemon.
+Git is needed to obtain/update the checkout. Python 3 is optional for discovery;
+manual configuration works without it. Homebrew is not required by JACK's installer.
+
+Keep the checkout in place: installation links to its `bin/jack`, rather than
+copying a versioned release. No package registry or release installer is provided.
+
 ## Install on Mac
 
 ```bash
 git clone https://github.com/mmontielpz/jack
 cd jack
+./bin/jack doctor
 ./scripts/setup-macos.sh
 ```
+
+Install Tailscale separately using its official macOS application/CLI and
+complete login/approval yourself. An optional package manager is your choice;
+JACK never installs Homebrew or runs remote installation scripts. macOS normally
+includes an SSH client. To receive SSH, enable Remote Login explicitly as below;
+JACK does not enable it.
 
 ## Install on the workstation (Arch / CachyOS)
 
 ```bash
 git clone https://github.com/mmontielpz/jack
 cd jack
+./bin/jack doctor
 ./scripts/setup-workstation.sh
 ```
 
-Installs Tailscale if missing, enables `tailscaled`, enables Tailscale SSH,
-and links `jack` into `~/.local/bin`. It never enables system `sshd` or
-touches the firewall. If Tailscale is not logged in yet, it tells you to run
-`sudo tailscale up --ssh`.
+The Linux installer verifies Arch/CachyOS through `/etc/os-release` and requires
+the existing `pacman` command. Install
+missing `openssh` and `tailscale` packages yourself through your normal admin
+workflow. If needed, explicitly enable/start `tailscaled` and authenticate
+Tailscale outside JACK. Receiving connections through Tailscale SSH also requires
+explicit authorization and enablement by the device owner. These are separate
+admin decisions: JACK no longer invokes pacman, sudo, systemctl, or
+`tailscale set --ssh`. It never enables system sshd or changes the firewall.
+
+Both scripts explain prerequisites, then require exact `yes` before creating
+`$HOME/.local/bin/jack`. Declining or EOF cancels. Repeating installation of the
+same checkout is a no-op; unrelated files or symlinks are refused, never replaced.
+The installer refuses symlinked/non-owned or group/other-writable installation
+directories. It preserves your JACK configuration, SSH keys, and shell profiles.
+No package installation, service changes, SSH policy changes, or profile edits
+are performed. A failed/declined installation may be retried after inspecting its
+error; directories created just before a failed link operation may remain.
+
+### Verify installation and PATH
+
+```bash
+"$HOME/.local/bin/jack" doctor
+```
+
+If `jack` is not found, use that full path. For the current Bash/zsh session:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+For a permanent entry, inspect and edit your own shell profile. Fish users can
+choose `fish_add_path ~/.local/bin`. Installers never edit shell files, including
+entries from older JACK versions. Then follow `jack doctor` → `jack setup` →
+`jack --status` → `jack` / `jack mac`. With one destination intentionally unused,
+`--status` still exits non-zero for that unconfigured destination.
+
+### Read-only diagnosis
+
+`jack doctor` reports PASS/WARN/FAIL for the running CLI (currently an unversioned
+source build), supported OS, Tailscale CLI/daemon state, SSH client, optional
+Python discovery capability, and configuration. It provides next actions without
+displaying configured identities or raw daemon output. Linux detection reads
+`ID=arch`/`ID=cachyos` from `/etc/os-release`; other/unknown distributions fail the
+supported-platform check. No profile is sourced to detect the OS.
+
+Exit codes: **0** all checks pass; **1** at least one failure; **2** warnings only
+(for example optional Python unavailable or one unused destination). Missing or
+invalid config fails with next steps. Without Python, daemon status can only be
+reported as running/starting or unavailable: the exact state remains unverified.
+Doctor performs no peer pings, SSH sessions, installation, sudo, or system changes.
+PASS never proves peer reachability, Tailscale SSH authorization, or authentication.
+
+### Upgrade
+
+Keep local changes safe: from the original checkout, check `git status`, then
+update a clean branch with `git pull --ff-only`. The installed symlink immediately
+uses that checkout's updated code. Run `./scripts/dev-check.sh` and `jack doctor`
+afterward. Existing configuration and keys are not migrated or overwritten.
+If the checkout moved, inspect/remove its old symlink yourself before installing
+from the new location; JACK refuses to replace links to other checkouts.
 
 ## Reverse access: workstation → Mac
 
@@ -237,8 +314,17 @@ Do not forward port 22 on your router. The Mac is only reached over Tailscale.
 ./scripts/setup-workstation.sh --uninstall  # on the workstation
 ```
 
-Removes only what `jack` installed (the `~/.local/bin/jack` symlink and its
-PATH entry). Homebrew, Tailscale, and SSH configuration are left untouched.
+Requires exact `yes` to remove only the symlink pointing to this checkout.
+Unrelated commands/links are refused. Configuration, keys, packages, services,
+and profiles stay untouched. If an older installer added PATH lines, inspect
+and remove those lines manually; uninstall does not rewrite your profile.
+
+## Security reporting
+
+Report vulnerabilities privately to the maintainer, as described in
+[CONTRIBUTING.md](CONTRIBUTING.md). Do not include credentials, keys, or private
+tailnet details in public issues. A dedicated security contact/policy is not yet
+published.
 
 ## Principles
 
@@ -260,6 +346,7 @@ for validating changes) and the workflow in [.ai/WORKFLOW.md](.ai/WORKFLOW.md).
 ```text
 bin/jack                     - the jack CLI
 scripts/dev-check.sh         - read-only contributor validation
-scripts/setup-macos.sh       - prepares the Mac client
-scripts/setup-workstation.sh - prepares the Linux workstation
+scripts/setup-macos.sh       - links the CLI on macOS
+scripts/setup-workstation.sh - links the CLI on Arch/CachyOS
+scripts/install-common.sh    - shared consent/non-overwrite installer logic
 ```
