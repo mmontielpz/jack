@@ -47,7 +47,7 @@ valid_host() {
 load_config() {
   local line key value seen="|" number=0 nul
   [[ -f "${CONFIG_FILE}" && -r "${CONFIG_FILE}" ]] || {
-    config_error "configuration file missing or unreadable"; return 1;
+    config_error "configuration file missing or unreadable; run jack setup"; return 1;
   }
   # Bash read otherwise silently discards NUL bytes. Reject before line parsing.
   # shellcheck disable=SC2034
@@ -98,6 +98,7 @@ Usage:
   jack mac      Connect to Mac
   jack --status Show status
   jack --help   Show help
+  jack setup    Guided destination configuration (see jack setup --help)
 
 Configuration: $HOME/.config/jack/config
 Use literal KEY=VALUE lines (no quotes or shell syntax):
@@ -105,6 +106,7 @@ Use literal KEY=VALUE lines (no quotes or shell syntax):
   WORKSTATION_HOST=workstation.example.ts.net
   MAC_USER=alex
   MAC_HOST=mac.example.ts.net
+Run jack setup for guided configuration.
 Set both keys for each destination you use. See config.example and README.md.
 
 Transport: Tailscale -> SSH
@@ -209,7 +211,199 @@ cmd_mac() {
   exec ssh "${MAC_USER}@${MAC_HOST}"
 }
 
+setup_usage() {
+  cat <<'HELP'
+Usage:
+  jack setup
+  jack setup --help
+  jack setup --non-interactive --yes [destination options]
+
+Destination options (supply both values for at least one device):
+  --workstation-user USER --workstation-host HOST
+  --mac-user USER --mac-host HOST
+
+Interactive setup asks for destinations and confirmation. Automation requires
+--non-interactive and --yes (explicit consent to create/replace configuration).
+No target defaults. Other existing device entries are preserved.
+Saves $HOME/.config/jack/config; stores no credentials.
+Discovery uses manual entry: copy a tailnet address from your Tailscale app or
+admin console. Setup never connects, installs software, or changes SSH policy.
+HELP
+}
+
+setup_error() {
+  printf 'jack setup: %s\n' "$*" >&2
+  return 1
+}
+
+setup_paths_safe() {
+  local dir writable
+  for dir in "${HOME}" "${HOME}/.config" "${HOME}/.config/jack"; do
+    [[ ! -L "${dir}" ]] || { setup_error 'symlink directory refused'; return 1; }
+    if [[ -e "${dir}" && ( ! -d "${dir}" || ! -O "${dir}" ) ]]; then
+      setup_error 'configuration directories must be owned by you'; return 1
+    fi
+    if [[ -d "${dir}" ]]; then
+      writable="$(find "${dir}" -prune \( -perm -002 -o -perm -020 \) -print)" || {
+        setup_error 'cannot verify directory permissions'; return 1;
+      }
+      if [[ -n "${writable}" ]]; then
+        setup_error 'configuration directories must not be writable by group or others'; return 1
+      fi
+    fi
+  done
+  if [[ -L "${CONFIG_FILE}" || ( -e "${CONFIG_FILE}" && ( ! -f "${CONFIG_FILE}" || ! -O "${CONFIG_FILE}" ) ) ]]; then
+    setup_error 'configuration must be a regular file owned by you, not a symlink'; return 1
+  fi
+}
+
+setup_snapshot() {
+  if [[ -e "${CONFIG_FILE}" ]]; then
+    cat "${CONFIG_FILE}" || return 1
+    printf '.' # Preserve trailing newlines in command substitution.
+  else
+    printf 'absent'
+  fi
+}
+
+setup_preview() {
+  if [[ -n "${WORKSTATION_USER}" ]]; then printf 'WORKSTATION_USER=%s\n' "${WORKSTATION_USER}" || return 1; fi
+  if [[ -n "${WORKSTATION_HOST}" ]]; then printf 'WORKSTATION_HOST=%s\n' "${WORKSTATION_HOST}" || return 1; fi
+  if [[ -n "${MAC_USER}" ]]; then printf 'MAC_USER=%s\n' "${MAC_USER}" || return 1; fi
+  if [[ -n "${MAC_HOST}" ]]; then printf 'MAC_HOST=%s\n' "${MAC_HOST}" || return 1; fi
+  return 0
+}
+
+setup_save() (
+  # Subshell confines umask and cleanup traps to this save operation.
+  umask 077
+  local dir="${HOME}/.config/jack" tmp="" locked=0 current
+  setup_paths_safe || exit 1
+  mkdir -p "${dir}" || { setup_error 'cannot create configuration directory'; exit 1; }
+  setup_paths_safe || exit 1
+  chmod 700 "${dir}" || exit 1
+  if ! mkdir "${dir}/.setup-lock"; then
+    setup_error 'configuration is locked; inspect .setup-lock before retrying'; exit 1
+  fi
+  locked=1
+  # shellcheck disable=SC2329
+  setup_cleanup() {
+    [[ -z "${tmp}" ]] || rm -f "${tmp}"
+    [[ "${locked}" -eq 0 ]] || rmdir "${dir}/.setup-lock"
+  }
+  trap setup_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  setup_paths_safe || exit 1
+  current="$(setup_snapshot)" || exit 1
+  [[ "${current}" == "${original}" ]] || {
+    setup_error 'configuration changed during setup; retry'; exit 1;
+  }
+  tmp="$(mktemp "${dir}/.config.XXXXXX")" || { setup_error 'cannot create temporary configuration'; exit 1; }
+  chmod 600 "${tmp}" || exit 1
+  setup_preview > "${tmp}" || { setup_error 'cannot write configuration'; exit 1; }
+  setup_paths_safe || exit 1
+  current="$(setup_snapshot)" || exit 1
+  [[ "${current}" == "${original}" ]] || {
+    setup_error 'configuration changed during setup; retry'; exit 1;
+  }
+  # Same-directory rename replaces the file atomically. Reject directories and
+  # symlinks above so mv cannot follow a destination into an unrelated location.
+  mv -f "${tmp}" "${CONFIG_FILE}" || { setup_error 'cannot save configuration'; exit 1; }
+  tmp=""
+)
+
+setup_read() {
+  printf '%s' "$1"
+  IFS= read -r answer || { setup_error 'input ended; cancelled without saving'; return 1; }
+}
+
+cmd_setup() {
+  local noninteractive=0 consent=0 seen='|' option value answer selection=""
+  local ws_user='' ws_host='' mac_user='' mac_host='' original
+  if [[ "${1:-}" == --help && $# -eq 1 ]]; then setup_usage; return; fi
+  while [[ $# -gt 0 ]]; do
+    option="$1"
+    shift
+    case "${seen}" in *"|${option}|"*) setup_error 'duplicate setup option'; return 1 ;; esac
+    seen="${seen}${option}|"
+    case "${option}" in
+      --non-interactive) noninteractive=1 ;;
+      --yes) consent=1 ;;
+      --workstation-user|--workstation-host|--mac-user|--mac-host)
+        [[ $# -gt 0 && "$1" != --* ]] || { setup_error "missing value for ${option}"; return 1; }
+        value="$1"; shift
+        case "${option}" in
+          --workstation-user) ws_user="${value}" ;;
+          --workstation-host) ws_host="${value}" ;;
+          --mac-user) mac_user="${value}" ;;
+          --mac-host) mac_host="${value}" ;;
+        esac ;;
+      *) setup_error 'unknown setup option; see jack setup --help'; return 1 ;;
+    esac
+  done
+  if [[ "${noninteractive}" -eq 1 ]]; then
+    [[ "${consent}" -eq 1 ]] || { setup_error '--non-interactive requires --yes'; return 1; }
+    [[ -n "${ws_user}${ws_host}${mac_user}${mac_host}" ]] || { setup_error 'supply at least one destination pair'; return 1; }
+  elif [[ "${seen}" != '|' ]]; then
+    setup_error 'destination options and --yes require --non-interactive'; return 1
+  fi
+  setup_paths_safe || return 1
+  original="$(setup_snapshot)" || return 1
+  if [[ -e "${CONFIG_FILE}" ]]; then load_config || return 1; fi
+  echo 'Set up JACK destinations. No passwords or SSH keys are needed here.'
+  if [[ "${noninteractive}" -eq 0 ]]; then
+    if ! check_tailscale_installed; then
+      echo 'Tailscale CLI unavailable. Install/connect Tailscale separately before connecting.'
+    elif tailscale status --peers=false --self=false >/dev/null 2>&1; then
+      echo 'Tailscale reports running or starting; connection and SSH authorization are not verified.'
+    else
+      echo 'Tailscale status unavailable or disconnected. Connect Tailscale separately.'
+    fi
+    echo 'Automatic discovery unavailable without a JSON parser; enter destinations manually.'
+    echo 'Find the other device in the Tailscale app/admin console; do not choose this device.'
+    setup_read 'Configure workstation, mac, or both? ' || return 1
+    selection="${answer}"
+    case "${selection}" in workstation|mac|both) ;; *) setup_error 'choose workstation, mac, or both'; return 1 ;; esac
+    if [[ "${selection}" == workstation || "${selection}" == both ]]; then
+      setup_read 'Workstation tailnet IPv4 or hostname: ' || return 1; ws_host="${answer}"
+      setup_read 'Workstation SSH username: ' || return 1; ws_user="${answer}"
+    fi
+    if [[ "${selection}" == mac || "${selection}" == both ]]; then
+      setup_read 'Mac tailnet IPv4 or hostname: ' || return 1; mac_host="${answer}"
+      setup_read 'Mac SSH username: ' || return 1; mac_user="${answer}"
+    fi
+  fi
+  if [[ "${seen}" == *'|--workstation-'* || ( "${noninteractive}" -eq 0 && "${selection}" != mac ) ]]; then
+    if ! valid_user "${ws_user}" || ! valid_host "${ws_host}"; then
+      setup_error 'invalid or missing workstation username/host'; return 1
+    fi
+    WORKSTATION_USER="${ws_user}"; WORKSTATION_HOST="${ws_host}"
+  fi
+  if [[ "${seen}" == *'|--mac-'* || ( "${noninteractive}" -eq 0 && "${selection}" != workstation ) ]]; then
+    if ! valid_user "${mac_user}" || ! valid_host "${mac_host}"; then
+      setup_error 'invalid or missing Mac username/host'; return 1
+    fi
+    MAC_USER="${mac_user}"; MAC_HOST="${mac_host}"
+  fi
+  printf 'Configuration preview (%s):\n' "${CONFIG_FILE}"
+  setup_preview || return 1
+  echo 'Saving replaces this file; comments are not retained. Other device entries are preserved.'
+  if [[ "${noninteractive}" -eq 0 ]]; then
+    setup_read 'Save this configuration? Type yes: ' || return 1
+    [[ "${answer}" == yes ]] || { setup_error 'cancelled without saving'; return 1; }
+  fi
+  setup_save || return 1
+  echo 'Configuration saved. Next: jack --status, then jack or jack mac.'
+  echo 'Reachability is not SSH authorization. Setup did not test an SSH session.'
+}
+
 main() {
+  if [[ "${1:-}" == setup ]]; then
+    shift
+    cmd_setup "$@"
+    return
+  fi
   if [[ $# -gt 1 ]]; then
     echo "jack: too many arguments" >&2
     usage >&2

@@ -163,7 +163,7 @@ main() {
   configure_path || path_needs_reload=1
 
   echo
-  echo "Configure destinations in ~/.config/jack/config (see config.example and README.md)."
+  echo "Run jack setup to configure destinations (or edit ~/.config/jack/config; see README.md)."
   if [[ "${tailscale_ready}" -eq 0 ]]; then
     cat <<EOF
 jack installed.
