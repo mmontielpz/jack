@@ -1,13 +1,17 @@
-# Contributing to jack
+# Contributing to JACK
 
-`jack` is a minimal, open-source Bash utility for reaching your machines over Tailscale + SSH. Product scope is set by the maintainer; see [.ai/WORKFLOW.md](.ai/WORKFLOW.md) for the full engineering workflow.
+JACK is a minimal Bash CLI using Tailscale and SSH. Keep proposals focused on
+that product; discuss changes to transport, dependencies or platform support
+before implementing them.
 
-## Contributor bootstrap (validate source)
+## Validate a checkout
 
-Contributor environments: macOS (system Bash 3.2 is supported) and Linux. Windows is not supported.
-
-- Required: Bash, Git.
-- Optional: `gh` (pull requests), `shellcheck` (reported, non-blocking).
+Contributor environments are macOS (including system Bash 3.2) and Linux.
+Supported product installation targets are macOS and Arch Linux / CachyOS;
+running offline checks elsewhere does not establish platform support.
+Bash and Git are required. ShellCheck and GitHub CLI are optional. An available
+Python 3 interpreter exercises optional discovery parsing; without it the checks
+test fallback behavior, so report that limitation.
 
 ```bash
 git clone https://github.com/mmontielpz/jack
@@ -15,19 +19,36 @@ cd jack
 ./scripts/dev-check.sh
 ```
 
-`dev-check.sh` is read-only and offline. It uses stubs, so it needs no Tailscale, SSH, sudo, or Homebrew and changes nothing on your machine. It exits non-zero if any check fails.
+The check exits non-zero on failure. It uses temporary HOME directories, command
+stubs and fixtures: no live tailnet, real SSH, package installation or system
+configuration changes. ShellCheck findings are reported but non-blocking.
+Do not run installers against your real HOME to validate a change; installation
+is documented in the [user guide](docs/guide.md).
 
-**Do not run `setup-macos.sh` or `setup-workstation.sh` to validate code.** Those manage the end-user CLI symlink and require consent. `dev-check.sh` tests them only with isolated temporary HOME directories and command stubs. Installation and Tailscale setup are described in the [README](README.md).
+## Bugs and proposals
 
-## Making a change
+Use the bug template for platform, reproduction steps, expected/actual behavior,
+and sanitized output. Use the feature template to explain the user problem and
+proposed outcome. Search existing issues first. Never attach secrets or full
+unredacted Tailscale diagnostics. Suspected vulnerabilities follow
+[SECURITY.md](SECURITY.md), including its current reporting-channel limitation;
+do not describe them in public issues.
 
-1. Branch from a clean, up-to-date `main` (`feat/…`, `fix/…`, `docs/…`, `chore/…`).
-2. Run `./scripts/dev-check.sh`.
-3. Open a pull request to `main` with a conventional-commit title (it becomes the squash commit).
-4. The required CI check `checks` runs the same `dev-check.sh` on Ubuntu; it must pass. PRs are squash-merged. Do not bypass CI.
+## Pull requests
 
-CI does not run on macOS, so macOS behavior is verified by contributors locally.
+1. Branch from clean, updated `main` using `feat/`, `fix/`, `docs/` or `chore/`.
+2. Keep changes focused; update relevant docs and run `./scripts/dev-check.sh`.
+3. Open a PR to `main` with a conventional-commit title and test evidence,
+   security implications, and actual platform validation.
+4. Required CI job `checks` runs the same script on Ubuntu and must pass.
+   PRs are squash-merged; never bypass CI or protection.
 
-## Security
+Offline tests include simulated platforms, not real macOS execution or SSH E2E.
+For platform-sensitive changes, macOS acceptance requires running the checks on
+a Mac and manually checking affected behavior. Label untested platforms and live
+SSH explicitly; do not infer them from Ubuntu CI. The [release checklist](docs/releases.md)
+describes broader acceptance before a future release.
 
-Never commit credentials, tokens, or private keys. Do not weaken SSH host verification or expose services publicly. Report vulnerabilities privately to the maintainer rather than in a public issue.
+Maintainers and engineering agents use [.ai/WORKFLOW.md](.ai/WORKFLOW.md) for
+execution authority, delivery, cleanup and slice evidence. It is the canonical
+internal engineering contract, not an additional end-user installation procedure.
