@@ -19,9 +19,9 @@ jack          # workstation
 jack mac      # Mac
 ```
 
-Setup asks whether to configure the workstation, Mac, or both; enter each
-selected device's tailnet IPv4/hostname and SSH account. It previews the result
-and saves only when you type `yes`. No existing destination is silently reused
+Setup asks whether to configure the workstation, Mac, or both. Select a discovered
+peer by number, or enter a tailnet IPv4/hostname manually, then enter its SSH
+account. It previews the result and saves only when you type `yes`. No existing destination is silently reused
 as the target you are editing. Updating one destination preserves the other.
 Use the other device's address, not this computer's address.
 
@@ -46,19 +46,45 @@ ending input cancels with a non-zero exit and leaves configuration unchanged.
 
 ### Discovery and Tailscale status
 
-This version uses a **manual discovery fallback**: Bash and the baseline native
-tools do not provide a general JSON parser, and setup adds no parser dependency.
-It does not parse JSON or select peers from `tailscale status --json`. Find the
-other device in the Tailscale app/admin console, then enter its IPv4 address or
-MagicDNS hostname. No peers are automatically trusted, selected, or contacted.
+Interactive setup uses `tailscale status --json` when the Tailscale CLI and a
+working **optional Python 3** interpreter are already available. Python's standard
+`json` and `ipaddress` libraries parse and validate data structurally. JACK does
+not install Python, jq, or other packages; Python is not required for manual
+setup, automation, or the existing connection/status commands. On macOS without
+Python, manual setup remains fully available. A missing/broken interpreter,
+missing CLI, disconnected daemon, malformed/unsupported response, or no usable
+peers produces a short explanation and a manual-entry prompt.
 
-Interactive setup checks for the Tailscale CLI and runs
-`tailscale status --peers=false --self=false`, discarding all output. Success
-means Tailscale reports running or starting; it does not verify a completed
-connection. Failure reports unavailable/disconnected status. Manual setup still
-works when Tailscale is missing, stopped, or unavailable; install/connect it
-separately before using remote access. Discovery/reachability never proves SSH
-authorization, and setup does not label a device READY or test SSH authentication.
+With discovery, setup lists numbered peers in numeric IPv4 order, always with
+`0) Enter a destination manually`. Choose a number explicitly; an empty or
+invalid choice never selects a default. For both roles, choose independently.
+If the final workstation and Mac host strings match, interactive setup requires
+an additional `yes` for the duplicate before the normal save confirmation.
+Non-interactive setup is unchanged: no discovery calls or new prompts, and
+`--yes` explicitly authorizes the supplied configuration.
+
+Only canonical Tailscale IPv4 addresses (`100.64.0.0/10`) are selectable. The
+local device is excluded by its addresses and available identity metadata;
+responses without usable local IPv4 identity fall back to manual entry. Unknown
+or invalid peer fields are ignored. Duplicate addresses produce one entry labelled
+“Multiple peers sharing address”; duplicate display names are distinguished by
+address. Display names use at most 80 characters, replacing characters outside
+ASCII letters, digits, spaces, dots, underscores, and hyphens with `?`. Missing
+names show “Unnamed peer”. Addresses, not display names, are saved.
+
+Discovery requires `BackendState` to be `Running`. It does not test peer
+reachability, SSH support, or SSH authorization, and never labels peers READY or
+connects to them. Peer online flags are not used. Tailscale's
+[JSON fields](https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go)
+can change; unsupported responses fall back safely. Responses over 1 MiB, more
+than 4096 peer records, duplicate JSON keys, and invalid JSON are rejected.
+Python runs in isolated mode with bytecode writes disabled; peer data is never
+executed or interpolated into code.
+
+For manual setup, find the other device in your Tailscale app/admin console and
+enter its IPv4 or MagicDNS hostname. Install/connect Tailscale separately before
+remote access. Manual entries retain Slice 07 validation; JACK does not resolve
+hostnames to detect aliases or verify tailnet membership.
 
 ### Saving safely
 

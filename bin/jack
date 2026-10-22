@@ -226,7 +226,8 @@ Interactive setup asks for destinations and confirmation. Automation requires
 --non-interactive and --yes (explicit consent to create/replace configuration).
 No target defaults. Other existing device entries are preserved.
 Saves $HOME/.config/jack/config; stores no credentials.
-Discovery uses manual entry: copy a tailnet address from your Tailscale app or
+With optional Python 3, setup offers numbered Tailscale IPv4 peers. Choose 0
+for manual entry. Without discovery, copy an address from the Tailscale app or
 admin console. Setup never connects, installs software, or changes SSH policy.
 HELP
 }
@@ -318,9 +319,137 @@ setup_read() {
   IFS= read -r answer || { setup_error 'input ended; cancelled without saving'; return 1; }
 }
 
+# Optional discovery only. -I ignores Python environment/user import paths.
+# Keep code literal: peer data enters through stdin, never as Python/shell code.
+discovery_parse() {
+  python3 -I -B -c '
+import ipaddress
+import json
+import sys
+
+
+def unique(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("duplicate JSON key")
+        obj[key] = value
+    return obj
+
+
+def reject_constant(value):
+    raise ValueError("non-JSON constant")
+
+
+def addresses(value):
+    result = set()
+    if isinstance(value, list):
+        for raw in value:
+            if not isinstance(raw, str):
+                continue
+            try:
+                ip = ipaddress.IPv4Address(raw)
+            except ipaddress.AddressValueError:
+                continue
+            if str(ip) == raw and ip in ipaddress.IPv4Network("100.64.0.0/10"):
+                result.add(ip)
+    return result
+
+
+def label(peer):
+    name = peer.get("DNSName") or peer.get("HostName")
+    if not isinstance(name, str):
+        return "Unnamed peer"
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-"
+    return "".join(c if c in allowed else "?" for c in name[:80]).strip(" .") or "Unnamed peer"
+
+
+try:
+    raw = sys.stdin.buffer.read(1048577)
+    if len(raw) > 1048576:
+        raise ValueError("oversized status")
+    status = json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
+                        parse_constant=reject_constant)
+    if not isinstance(status, dict) or status.get("BackendState") != "Running":
+        raise ValueError("not running")
+    local = status.get("Self") or {}
+    if not isinstance(local, dict):
+        raise ValueError("invalid local identity")
+    local_ips = addresses(status.get("TailscaleIPs")) | addresses(local.get("TailscaleIPs"))
+    if not local_ips:
+        raise ValueError("cannot exclude local device")
+    peers = status.get("Peer") or {}
+    if not isinstance(peers, dict) or len(peers) > 4096:
+        raise ValueError("invalid peers")
+    rows = {}
+    for key, peer in peers.items():
+        if not isinstance(peer, dict):
+            continue
+        if (local.get("ID") and peer.get("ID") == local["ID"]) or (
+                local.get("PublicKey") and (key == local["PublicKey"] or
+                                            peer.get("PublicKey") == local["PublicKey"])):
+            continue
+        ips = addresses(peer.get("TailscaleIPs"))
+        if ips & local_ips:
+            continue
+        if ips:
+            ip = min(ips)
+            rows.setdefault(ip, []).append(label(peer))
+    # Numeric IPv4 order is independent of JSON object order and display names.
+    for ip in sorted(rows):
+        name = rows[ip][0] if len(rows[ip]) == 1 else "Multiple peers sharing address"
+        print("{}\t{}".format(ip, name))
+except (ValueError, TypeError, RecursionError, OverflowError):
+    sys.exit(1)
+'
+}
+
+setup_discover() {
+  peers=""
+  if ! check_tailscale_installed; then
+    echo 'Tailscale CLI unavailable. Install/connect Tailscale separately; enter destinations manually.'
+  elif ! command -v python3 >/dev/null 2>&1; then
+    echo 'Optional Python 3 parser unavailable; enter destinations manually.'
+  elif ! peers="$(tailscale status --json 2>/dev/null | discovery_parse 2>/dev/null)"; then
+    peers=""
+    echo 'Discovery unavailable: disconnected Tailscale or unusable status; enter destinations manually.'
+  elif [[ -z "${peers}" ]]; then
+    echo 'No valid remote IPv4 peers found; enter destinations manually.'
+  else
+    echo 'Discovered tailnet peers. Reachability and SSH authorization are not tested.'
+  fi
+}
+
+setup_choose_host() {
+  local role="$1" ip name index=0 choice
+  chosen_host=""
+  if [[ -n "${peers}" ]]; then
+    while IFS=$'\t' read -r ip name; do
+      index=$((index + 1))
+      printf '  %s) %s — %s\n' "${index}" "${name}" "${ip}"
+    done <<< "${peers}"
+    echo '  0) Enter a destination manually'
+    setup_read "${role} device number (or 0 for manual): " || return 1
+    choice="${answer}"
+    if [[ "${choice}" != 0 && "${choice}" != manual ]]; then
+      [[ "${choice}" =~ ^[1-9][0-9]{0,3}$ ]] || { setup_error 'invalid device selection'; return 1; }
+      index=0
+      while IFS=$'\t' read -r ip name; do
+        index=$((index + 1))
+        if [[ "${choice}" == "${index}" ]]; then chosen_host="${ip}"; break; fi
+      done <<< "${peers}"
+      [[ -n "${chosen_host}" ]] || { setup_error 'device number out of range'; return 1; }
+      valid_host "${chosen_host}" || return 1
+      return 0
+    fi
+  fi
+  setup_read "${role} tailnet IPv4 or hostname: " || return 1
+  chosen_host="${answer}"
+}
+
 cmd_setup() {
   local noninteractive=0 consent=0 seen='|' option value answer selection=""
-  local ws_user='' ws_host='' mac_user='' mac_host='' original
+  local ws_user='' ws_host='' mac_user='' mac_host='' original peers='' chosen_host=''
   if [[ "${1:-}" == --help && $# -eq 1 ]]; then setup_usage; return; fi
   while [[ $# -gt 0 ]]; do
     option="$1"
@@ -353,24 +482,17 @@ cmd_setup() {
   if [[ -e "${CONFIG_FILE}" ]]; then load_config || return 1; fi
   echo 'Set up JACK destinations. No passwords or SSH keys are needed here.'
   if [[ "${noninteractive}" -eq 0 ]]; then
-    if ! check_tailscale_installed; then
-      echo 'Tailscale CLI unavailable. Install/connect Tailscale separately before connecting.'
-    elif tailscale status --peers=false --self=false >/dev/null 2>&1; then
-      echo 'Tailscale reports running or starting; connection and SSH authorization are not verified.'
-    else
-      echo 'Tailscale status unavailable or disconnected. Connect Tailscale separately.'
-    fi
-    echo 'Automatic discovery unavailable without a JSON parser; enter destinations manually.'
+    setup_discover
     echo 'Find the other device in the Tailscale app/admin console; do not choose this device.'
     setup_read 'Configure workstation, mac, or both? ' || return 1
     selection="${answer}"
     case "${selection}" in workstation|mac|both) ;; *) setup_error 'choose workstation, mac, or both'; return 1 ;; esac
     if [[ "${selection}" == workstation || "${selection}" == both ]]; then
-      setup_read 'Workstation tailnet IPv4 or hostname: ' || return 1; ws_host="${answer}"
+      setup_choose_host Workstation || return 1; ws_host="${chosen_host}"
       setup_read 'Workstation SSH username: ' || return 1; ws_user="${answer}"
     fi
     if [[ "${selection}" == mac || "${selection}" == both ]]; then
-      setup_read 'Mac tailnet IPv4 or hostname: ' || return 1; mac_host="${answer}"
+      setup_choose_host Mac || return 1; mac_host="${chosen_host}"
       setup_read 'Mac SSH username: ' || return 1; mac_user="${answer}"
     fi
   fi
@@ -385,6 +507,10 @@ cmd_setup() {
       setup_error 'invalid or missing Mac username/host'; return 1
     fi
     MAC_USER="${mac_user}"; MAC_HOST="${mac_host}"
+  fi
+  if [[ "${noninteractive}" -eq 0 && -n "${WORKSTATION_HOST}" && "${WORKSTATION_HOST}" == "${MAC_HOST}" ]]; then
+    setup_read 'Both roles use the same host. Type yes to allow this duplicate: ' || return 1
+    [[ "${answer}" == yes ]] || { setup_error 'duplicate destination not confirmed'; return 1; }
   fi
   printf 'Configuration preview (%s):\n' "${CONFIG_FILE}"
   setup_preview || return 1
