@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016,SC2329
+# ShellCheck 0.9 cannot follow run_check dispatch or EXIT traps (SC2317).
+# shellcheck disable=SC2016,SC2317,SC2329
 # Read-only contributor validation for jack. Works on macOS (Bash 3.2) and Linux.
 # Never installs, uses sudo, touches the network, or runs a real ssh/tailscale.
 # Every jack run is isolated: temporary HOME, minimal PATH of stubs, env -i.

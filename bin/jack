@@ -288,7 +288,8 @@ setup_save() (
     setup_error 'configuration is locked; inspect .setup-lock before retrying'; exit 1
   fi
   locked=1
-  # shellcheck disable=SC2329
+  # Called by EXIT trap; older ShellCheck reports the body unreachable.
+  # shellcheck disable=SC2317,SC2329
   setup_cleanup() {
     [[ -z "${tmp}" ]] || rm -f "${tmp}"
     [[ "${locked}" -eq 0 ]] || rmdir "${dir}/.setup-lock"
