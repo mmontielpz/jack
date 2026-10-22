@@ -31,7 +31,7 @@ Use the bug template for platform, reproduction steps, expected/actual behavior,
 and sanitized output. Use the feature template to explain the user problem and
 proposed outcome. Search existing issues first. Never attach secrets or full
 unredacted Tailscale diagnostics. Suspected vulnerabilities follow
-[SECURITY.md](SECURITY.md), including its current reporting-channel limitation;
+[SECURITY.md](SECURITY.md) through GitHub private vulnerability reporting;
 do not describe them in public issues.
 
 ## Pull requests

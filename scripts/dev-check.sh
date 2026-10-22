@@ -170,6 +170,49 @@ check_help() {
   untouched
 }
 
+check_version() {
+  local scenario out rc ok=0
+  mkdir "${T}/bin-version"
+  link_tool "${T}/bin-version" cat || return 1
+  local tool
+  for tool in git ssh tailscale sudo python3; do
+    write_stub "${T}/bin-version/${tool}" "${TRIPWIRE}"
+  done
+  # Run a standalone copy as well as the checkout: no adjacent version file/Git.
+  cp "${JACK}" "${T}/standalone-jack"
+  for scenario in missing valid malformed; do
+    case "${scenario}" in
+      missing) clear_config ;;
+      valid) set_config "${VALID_CONFIG}" ;;
+      malformed) set_config 'MAC_USER=$(printf injected > "$HOME/version-executed")' ;;
+    esac
+    rc=0
+    out="$(run_iso "${T}/bin-version" "${T}/standalone-jack" --version 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 || "${out}" != 'jack 0.1.0-rc.1' ]]; then
+      fail "--version ${scenario}: unexpected result (rc=${rc})"; ok=1
+    fi
+    untouched || ok=1
+  done
+  # Even an absent HOME and empty PATH need no fallback, files or commands.
+  rc=0
+  out="$(env -i PATH= "${BASH}" "${JACK}" --version 2>&1)" || rc=$?
+  [[ "${rc}" -eq 0 && "${out}" == 'jack 0.1.0-rc.1' ]] || { fail '--version requires environment/tools'; ok=1; }
+  rc=0
+  out="$(run_iso "${T}/bin-version" "${JACK}" --version extra 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'too many arguments'; then
+    fail '--version accepted extra arguments'; ok=1
+  fi
+  rc=0
+  out="$(run_iso "${T}/bin-version" "${JACK}" --help 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'jack --version'; then
+    fail 'help lacks version guidance'; ok=1
+  fi
+  untouched || ok=1
+  rm -f "${T}/standalone-jack"
+  setup_reset
+  return "${ok}"
+}
+
 check_unknown_argument() {
   local out rc=0 ok=0
   out="$(run_iso "${T}/bin-notail" "${JACK}" bogus 2>&1)" || rc=$?
@@ -844,6 +887,7 @@ check_doctor() {
     rc=0
     out="$(doctor_run 2>&1)" || rc=$?
     if [[ "${rc}" -ne "${expected}" ]]; then fail "doctor ${scenario}: rc=${rc}, ${out}"; ok=1; fi
+    contains "${out}" 'JACK CLI: running (0.1.0-rc.1; source checkout identity).' || { fail 'doctor version identity mismatch'; ok=1; }
     contains "${out}" 'Doctor is read-only' || { fail 'doctor did not finish checks'; ok=1; }
     if contains "${out}" 'secret' || contains "${out}" '100.101.102.103' || contains "${out}" 'mac.example.ts.net'; then fail 'doctor disclosed config values'; ok=1; fi
     [[ ! -e "${T}/home/leak" ]] || { fail 'doctor executed config'; ok=1; }
@@ -987,6 +1031,7 @@ fi
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
+run_check VERSION check_version
 run_check UNKNOWN_ARGUMENT check_unknown_argument
 run_check OFFLINE_STATUS check_offline_status
 run_check CONFIG_ERRORS check_config_errors

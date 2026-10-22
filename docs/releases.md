@@ -1,14 +1,28 @@
 # Planned release and version policy
 
-This is a policy for future releases, not an announcement of a release.
-At Slice 12, JACK has no Git tags, published GitHub releases, packaged version,
-or package-registry distribution. The CLI identifies itself as an unversioned
-source build; use the checkout commit SHA to identify tested code. Installation
-currently links to a source checkout, so updating it changes the installed CLI.
+The current source identity is **0.1.0-rc.1**, a pre-release candidate identity
+for validation, not a published release or acceptance claim. No tag, GitHub
+release or package distribution is created by Slice 14B. See the
+[draft candidate notes](release-notes-0.1.0-rc.1.md).
+
+## Authoritative identity
+
+`JACK_VERSION` in [bin/jack](../bin/jack) is the single authoritative version
+constant. `jack --version` prints `jack 0.1.0-rc.1` and exits 0 without reading
+configuration, writing files, querying Git or invoking network/dependency checks.
+It works without HOME or external commands; extra arguments are rejected.
+`jack doctor` uses the same constant. No companion VERSION file, runtime Git
+lookup, version inference or environment override is used.
+
+Maintainers update that constant intentionally for a new version and update
+expected test output, documentation and notes in the same reviewed PR. A version
+label alone does not identify an immutable build: record the full checkout SHA
+and whether the tree is clean for every candidate-validation run. Source
+installation links to the checkout, so updating it immediately changes JACK.
 
 ## Proposed versioning
 
-Use SemVer (`MAJOR.MINOR.PATCH`) when versioned releases begin. Before 1.0,
+Use SemVer (`MAJOR.MINOR.PATCH`), with candidate suffixes such as `-rc.1`. Before 1.0,
 minor versions may introduce documented incompatible changes; patches should
 preserve documented commands/configuration and fix defects. Any change to
 commands, config or installation behavior needs explicit migration guidance.
@@ -20,8 +34,8 @@ this document does not claim that milestone or perpetual compatibility.
 Before a maintainer approves a future release:
 
 - Choose and document the version, intended scope, known limitations and any
-  migration steps using actual changes. Decide how version identity will be
-  represented; no runtime version flag or publishing automation is added here.
+  migration steps using actual changes. Verify `jack --version` and doctor
+  agree with the authoritative constant; freeze and record the tested commit SHA.
 - Pass `./scripts/dev-check.sh` and required PR CI `checks`. Record Python/parser
   availability and ShellCheck results. Review docs, links and security implications.
 - Perform source-checkout install, repeat install and uninstall acceptance on
@@ -40,4 +54,21 @@ Before a maintainer approves a future release:
 
 macOS is primary; Arch/CachyOS is the supported Linux installation path.
 Other Linux distributions and Windows are outside current support claims.
-This slice does not create tags, publish releases, or configure distribution.
+No publishing automation is provided. Initial validation is source-only: no new
+binary installer or package artifact is necessary. Tags, release publication,
+archives/checksums or distribution require separate authorization.
+
+## Candidate acceptance evidence
+
+For each supported platform, record OS/Bash/dependency versions, exact commit,
+clean-tree status, version output, source install/repeat/uninstall preservation,
+doctor result/exit code (including expected optional warnings), interactive and
+non-interactive setup, discovery/manual fallback, cancellation, status semantics,
+and authorized SSH outcomes in each direction. Do not include credentials or
+unredacted tailnet diagnostics. Distinguish actual machines from simulations and
+leave unavailable tests explicitly NOT_RUN with an owner disposition.
+
+Draft notes should identify the candidate/version and frozen SHA, supported
+platforms, verified changes, migration, dependencies, security reporting, known
+limitations and actual acceptance evidence. Populate post-merge SHA/CI facts only
+once verified; no release date or successful runtime acceptance may be invented.

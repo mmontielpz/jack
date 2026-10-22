@@ -26,6 +26,7 @@ cd jack
 ./scripts/setup-macos.sh        # macOS: consented user-level CLI link
 # On Arch/CachyOS, use ./scripts/setup-workstation.sh instead.
 export PATH="$HOME/.local/bin:$PATH"  # current Bash/zsh session
+jack --version
 jack doctor
 jack setup
 jack --status
@@ -49,9 +50,9 @@ when a destination is unused or unreachable, even if the other is usable.
 
 - [User guide](docs/guide.md): installation prerequisites, PATH, setup and automation,
   discovery limits, manual configuration, migration, diagnosis, upgrade and uninstall.
-- [Security policy](SECURITY.md): trust boundaries and current reporting limitations.
+- [Security policy](SECURITY.md): trust boundaries and private vulnerability reporting.
 - [Contributing](CONTRIBUTING.md): offline checks, bugs, proposals and pull requests.
-- [Planned release policy](docs/releases.md): versioning and acceptance checklist;
+- [Release policy](docs/releases.md): candidate identity and acceptance checklist;
   no published release or package distribution is provided.
 - [Brand guidelines](docs/branding.md): vector assets, palette, provenance and usage.
 

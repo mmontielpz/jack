@@ -117,6 +117,7 @@ jack           # connect to the workstation
 jack mac       # connect to the Mac
 jack --status  # show configured devices and reachability
 jack --help    # show usage and configuration guidance
+jack --version # report source version without configuration or network access
 ```
 
 ## Manual configuration alternative
@@ -248,8 +249,8 @@ entries from older JACK versions. Then follow `jack doctor` → `jack setup` →
 
 ### Read-only diagnosis
 
-`jack doctor` reports PASS/WARN/FAIL for the running CLI (currently an unversioned
-source build), supported OS, Tailscale CLI/daemon state, SSH client, optional
+`jack doctor` reports PASS/WARN/FAIL for the running CLI (using the same version
+identity as `jack --version`), supported OS, Tailscale CLI/daemon state, SSH client, optional
 Python discovery capability, and configuration. It provides next actions without
 displaying configured identities or raw daemon output. Linux detection reads
 `ID=arch`/`ID=cachyos` from `/etc/os-release`; other/unknown distributions fail the
