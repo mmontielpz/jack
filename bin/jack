@@ -226,9 +226,9 @@ Interactive setup asks for destinations and confirmation. Automation requires
 --non-interactive and --yes (explicit consent to create/replace configuration).
 No target defaults. Other existing device entries are preserved.
 Saves $HOME/.config/jack/config; stores no credentials.
-With optional Python 3, setup offers numbered Tailscale IPv4 peers. Choose 0
-for manual entry. Without discovery, copy an address from the Tailscale app or
-admin console. Setup never connects, installs software, or changes SSH policy.
+With optional Python 3, setup recommends Linux workstations and macOS Macs.
+Choose a to show all devices, or 0 for manual entry. OS advice is not a restriction.
+Without discovery, copy an address from the Tailscale app or admin console. Setup never connects, installs software, or changes SSH policy.
 HELP
 }
 
@@ -357,11 +357,24 @@ def addresses(value):
 
 
 def label(peer):
-    name = peer.get("DNSName") or peer.get("HostName")
+    name = peer.get("HostName")
+    if not isinstance(name, str) or not name:
+        name = peer.get("DNSName")
     if not isinstance(name, str):
         return "Unnamed peer"
+    name = name.split(".", 1)[0]
     allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-"
     return "".join(c if c in allowed else "?" for c in name[:80]).strip(" .") or "Unnamed peer"
+
+
+def operating_system(peer):
+    value = peer.get("OS")
+    # Canonical Tailscale/version.OS and Go OS identifiers only; no guessing
+    # from device names, distro names, capitalization, or substring matches.
+    labels = {"linux": "Linux", "macOS": "macOS", "darwin": "macOS",
+              "windows": "Windows", "android": "Android", "iOS": "iOS",
+              "tvOS": "tvOS", "freebsd": "FreeBSD", "openbsd": "OpenBSD"}
+    return labels.get(value, "Unknown") if isinstance(value, str) else "Unknown"
 
 
 try:
@@ -394,11 +407,11 @@ try:
             continue
         if ips:
             ip = min(ips)
-            rows.setdefault(ip, []).append(label(peer))
+            rows.setdefault(ip, []).append((label(peer), operating_system(peer)))
     # Numeric IPv4 order is independent of JSON object order and display names.
     for ip in sorted(rows):
-        name = rows[ip][0] if len(rows[ip]) == 1 else "Multiple peers sharing address"
-        print("{}\t{}".format(ip, name))
+        name, os_label = rows[ip][0] if len(rows[ip]) == 1 else ("Multiple peers sharing address", "Unknown")
+        print("{}\t{}\t{}".format(ip, name, os_label))
 except (ValueError, TypeError, RecursionError, OverflowError):
     sys.exit(1)
 '
@@ -420,31 +433,70 @@ setup_discover() {
   fi
 }
 
+setup_check_os() {
+  local role="$1" actual="$2" expected="$3"
+  if [[ "${actual}" == Unknown ]]; then
+    echo 'OS: Unknown; compatibility is unverified.'
+  elif [[ "${actual}" != "${expected}" ]]; then
+    printf 'Warning: this device reports %s; %s is recommended for %s.\n' "${actual}" "${expected}" "${role}"
+    setup_read 'Use this device anyway? Type yes: ' || return 1
+    [[ "${answer}" == yes ]] || { setup_error 'OS mismatch not confirmed; cancelled without saving'; return 1; }
+  fi
+}
+
 setup_choose_host() {
-  local role="$1" ip name index=0 choice
+  local role="$1" ip name os index choice expected=Linux show_all=0 visible chosen_os=Unknown
+  [[ "${role}" != Mac ]] || expected=macOS
   chosen_host=""
   if [[ -n "${peers}" ]]; then
-    while IFS=$'\t' read -r ip name; do
-      index=$((index + 1))
-      printf '  %s) %s — %s\n' "${index}" "${name}" "${ip}"
-    done <<< "${peers}"
-    echo '  0) Enter a destination manually'
-    setup_read "${role} device number (or 0 for manual): " || return 1
-    choice="${answer}"
-    if [[ "${choice}" != 0 && "${choice}" != manual ]]; then
+    while :; do
+      visible=""
+      while IFS=$'\t' read -r ip name os; do
+        if [[ "${show_all}" -eq 1 || "${os}" == "${expected}" ]]; then
+          visible="${visible}${ip}"$'\t'"${name}"$'\t'"${os}"$'\n'
+        fi
+      done <<< "${peers}"
+      if [[ "${show_all}" -eq 1 ]]; then
+        echo 'All discovered devices:'
+      elif [[ -n "${visible}" ]]; then
+        printf 'Recommended for %s (%s; other devices are available):\n' "${role}" "${expected}"
+      else
+        printf 'No devices reporting %s found for %s. Show all devices or enter an address manually.\n' "${expected}" "${role}"
+      fi
+      index=0
+      while IFS=$'\t' read -r ip name os; do
+        [[ -n "${ip}" ]] || continue
+        index=$((index + 1))
+        printf '  %s) %s | %s | %s\n' "${index}" "${name}" "${os}" "${ip}"
+      done <<< "${visible}"
+      [[ "${show_all}" -eq 1 ]] || echo '  a) Show all devices'
+      echo '  0) Enter an address manually'
+      setup_read "${role}: choose a number, a for all, or 0 for manual: " || return 1
+      choice="${answer}"
+      if [[ "${choice}" == a || "${choice}" == all ]]; then show_all=1; continue; fi
+      if [[ "${choice}" == 0 || "${choice}" == manual ]]; then break; fi
       [[ "${choice}" =~ ^[1-9][0-9]{0,3}$ ]] || { setup_error 'invalid device selection'; return 1; }
       index=0
-      while IFS=$'\t' read -r ip name; do
+      while IFS=$'\t' read -r ip name os; do
+        [[ -n "${ip}" ]] || continue
         index=$((index + 1))
-        if [[ "${choice}" == "${index}" ]]; then chosen_host="${ip}"; break; fi
-      done <<< "${peers}"
+        if [[ "${choice}" == "${index}" ]]; then chosen_host="${ip}"; chosen_os="${os}"; break; fi
+      done <<< "${visible}"
       [[ -n "${chosen_host}" ]] || { setup_error 'device number out of range'; return 1; }
       valid_host "${chosen_host}" || return 1
+      setup_check_os "${role}" "${chosen_os}" "${expected}" || return 1
       return 0
-    fi
+    done
   fi
-  setup_read "${role} tailnet IPv4 or hostname: " || return 1
+  setup_read "${role} device address (IPv4 or hostname): " || return 1
   chosen_host="${answer}"
+  # Use known metadata for an exact manually entered discovered address too.
+  if [[ -n "${peers}" ]]; then
+    while IFS=$'\t' read -r ip name os; do
+      if [[ "${ip}" == "${chosen_host}" ]]; then chosen_os="${os}"; break; fi
+    done <<< "${peers}"
+  fi
+  setup_check_os "${role}" "${chosen_os}" "${expected}"
 }
 
 cmd_setup() {

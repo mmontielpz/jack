@@ -55,22 +55,43 @@ Python, manual setup remains fully available. A missing/broken interpreter,
 missing CLI, disconnected daemon, malformed/unsupported response, or no usable
 peers produces a short explanation and a manual-entry prompt.
 
-With discovery, setup lists numbered peers in numeric IPv4 order, always with
-`0) Enter a destination manually`. Choose a number explicitly; an empty or
-invalid choice never selects a default. For both roles, choose independently.
-If the final workstation and Mac host strings match, interactive setup requires
-an additional `yes` for the duplicate before the normal save confirmation.
-Non-interactive setup is unchanged: no discovery calls or new prompts, and
-`--yes` explicitly authorizes the supplied configuration.
+With discovery, each choice shows a short device name, reported OS, and IPv4
+address. Setup first recommends Linux devices for **workstation**, and macOS
+devices for **Mac**. Workstation is your primary remote destination, commonly
+Linux; recommendations are advisory. The Mac destination represents a Mac.
+Choose `a) Show all devices` to access every discovered peer, or
+`0) Enter an address manually` at either view. If no devices report the
+recommended OS, both options remain available. The same prompt shows the full
+list after `a`; there are no nested menus or default device selections.
+Numbers follow numeric IPv4 order within the displayed list. Choose each role
+independently when configuring both destinations.
+
+Selecting a device with a known OS that differs from the role's recommendation
+shows a warning and requires an explicit `yes` before continuing. Declining or
+ending input cancels without saving. Unknown OS displays **Unknown** and explains
+that compatibility is unverified; it does not trigger a mismatch warning.
+Exact manually entered discovered IPv4 addresses receive the same OS advice;
+manual hostnames/aliases are not resolved to infer OS. Final configuration
+preview and save consent are still required. If both host strings match, the
+separate duplicate-destination confirmation also remains. Non-interactive setup
+is unchanged: no discovery, OS prompts, or new arguments; `--yes` authorizes the
+explicitly supplied configuration.
 
 Only canonical Tailscale IPv4 addresses (`100.64.0.0/10`) are selectable. The
-local device is excluded by its addresses and available identity metadata;
-responses without usable local IPv4 identity fall back to manual entry. Unknown
-or invalid peer fields are ignored. Duplicate addresses produce one entry labelled
-“Multiple peers sharing address”; duplicate display names are distinguished by
-address. Display names use at most 80 characters, replacing characters outside
-ASCII letters, digits, spaces, dots, underscores, and hyphens with `?`. Missing
-names show “Unnamed peer”. Addresses, not display names, are saved.
+local device remains excluded by its addresses and identity metadata; responses
+without usable local IPv4 identity fall back to manual entry. Duplicate
+addresses produce one “Multiple peers sharing address” entry with OS **Unknown**;
+identical names are distinguished by address. Display names prefer `HostName`,
+fall back to `DNSName`, and use the first dot-separated component, at most 80
+characters. Characters outside ASCII letters, digits, spaces, dots, underscores,
+and hyphens become `?`. Missing names show “Unnamed peer”. Only addresses are saved.
+
+OS labels recognize the exact Tailscale/Go identifiers `linux`, `macOS`, `darwin`,
+`windows`, `android`, `iOS`, `tvOS`, `freebsd`, and `openbsd`; `darwin` maps to
+macOS. Missing, malformed, or unrecognized values become **Unknown**. OS is
+self-reported metadata, not a compatibility guarantee; distro names, substrings,
+and device names are never used to guess an OS. Display metadata is never used
+in commands or written to configuration.
 
 Discovery requires `BackendState` to be `Running`. It does not test peer
 reachability, SSH support, or SSH authorization, and never labels peers READY or
