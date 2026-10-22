@@ -48,7 +48,7 @@ TRIPWIRE='printf "%s\n" "${0##*/} $*" >> "${STUB_LOG:-/dev/null}"; exit 99'
 
 make_fixtures() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/jack-dev-check.XXXXXX")" || return 1
-  mkdir "${T}/home" "${T}/expected-home" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
+  mkdir "${T}/home" "${T}/expected-home" "${T}/bin-setup" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
   : > "${T}/calls.log"
   : > "${T}/ts.log"
   : > "${T}/ssh.log"
@@ -72,6 +72,17 @@ exit 99'
   ln -s "${T}/bin-tail/tailscale" "${T}/bin-route/tailscale"
   write_stub "${T}/bin-route/ssh" 'printf "%s\n" "$#" "$@" >> "${SSH_LOG}"; exit 0'
 
+  for n in cat grep mkdir chmod find mktemp mv rm rmdir; do
+    link_tool "${T}/bin-setup" "${n}" || return 1
+  done
+  for n in ssh sudo brew pacman systemctl launchctl; do
+    write_stub "${T}/bin-setup/${n}" "${TRIPWIRE}"
+  done
+  write_stub "${T}/bin-setup/tailscale" 'printf "%s\n" "$*" >> "${TS_LOG}"
+if [ "$1" != status ]; then exit 99; fi
+if [ -s "${DISCOVERY_OUTPUT}" ]; then cat "${DISCOVERY_OUTPUT}"; exit 0; fi
+exit 1'
+
   # Installer fixtures: fake OS name, tripwires for anything that would mutate.
   for d in bin-linux bin-darwin bin-nopacman; do
     link_tool "${T}/${d}" dirname || return 1
@@ -92,7 +103,7 @@ run_iso() { # pathdir command args...
   local p="$1"
   shift
   env -i HOME="${T}/home" PATH="${p}" TERM=dumb STUB_LOG="${T}/calls.log" \
-    LC_ALL=C SSH_LOG="${T}/ssh.log" TS_PING_RC="${TS_PING_RC}" \
+    DISCOVERY_OUTPUT="${T}/discovery-output" LC_ALL=C SSH_LOG="${T}/ssh.log" TS_PING_RC="${TS_PING_RC}" \
     TS_LOG="${T}/ts.log" TS_STATE="${TS_STATE}" FAKE_OS="${FAKE_OS}" "${BASH}" "$@"
 }
 
@@ -316,6 +327,191 @@ ${VALID_CONFIG}"
   return "${ok}"
 }
 
+# Setup tests use the same isolated HOME and real native file operations only.
+setup_run() {
+  run_iso "${T}/bin-setup" "${JACK}" setup "$@"
+}
+
+setup_reset() {
+  # Only fixtures inside the mktemp directory are removed.
+  rm -rf "${T}/home/.config" "${T}/expected-home/.config"
+  : > "${T}/calls.log"
+  : > "${T}/ts.log"
+  : > "${T}/ssh.log"
+  : > "${T}/discovery-output"
+}
+
+setup_expect_fail() {
+  local out rc=0
+  out="$(setup_run "$@" < /dev/null 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]]; then fail "setup unexpectedly accepted: $*"; return 1; fi
+  untouched
+}
+
+check_setup_interactive() {
+  local out rc choice set_expected ok=0
+  for choice in workstation mac both; do
+    setup_reset
+    case "${choice}" in
+      workstation) printf 'workstation\nworkstation.example.ts.net\nalex\nyes\n' > "${T}/answers" ;;
+      mac) printf 'mac\n100.104.105.106\nalex\nyes\n' > "${T}/answers" ;;
+      both) printf 'both\nworkstation.example.ts.net\nalex\n100.104.105.106\nalex\nyes\n' > "${T}/answers" ;;
+    esac
+    rc=0
+    out="$(setup_run < "${T}/answers" 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'Configuration saved'; then fail "interactive ${choice}: ${out}"; ok=1; fi
+    case "${choice}" in
+      workstation) set_expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=workstation.example.ts.net' ;;
+      mac) set_expected=$'MAC_USER=alex\nMAC_HOST=100.104.105.106' ;;
+      both) set_expected=$'WORKSTATION_USER=alex\nWORKSTATION_HOST=workstation.example.ts.net\nMAC_USER=alex\nMAC_HOST=100.104.105.106' ;;
+    esac
+    mkdir -p "${T}/expected-home/.config/jack"
+    printf '%s\n' "${set_expected}" > "${T}/expected-home/.config/jack/config"
+    untouched || ok=1
+    [[ "$(cat "${T}/ts.log")" == 'status --peers=false --self=false' ]] || { fail 'unexpected Tailscale operation'; ok=1; }
+    # Portable find permission predicates: exact private modes.
+    [[ -n "$(find "${T}/home/.config/jack/config" -perm 600 -print)" ]] || { fail 'config permissions'; ok=1; }
+    [[ -n "$(find "${T}/home/.config/jack" -prune -perm 700 -print)" ]] || { fail 'directory permissions'; ok=1; }
+  done
+  setup_reset
+  return "${ok}"
+}
+
+check_setup_automation() {
+  local out ok=0
+  setup_reset
+  out="$(setup_run --help 2>&1)" || ok=1
+  contains "${out}" '--non-interactive' || ok=1
+  setup_expect_fail --non-interactive || ok=1
+  setup_expect_fail --non-interactive --yes || ok=1
+  setup_expect_fail --non-interactive --yes --mac-user alex || ok=1
+  setup_expect_fail --non-interactive --yes --mac-user alex --mac-host || ok=1
+  setup_expect_fail --non-interactive --yes --mac-user alex --mac-host mac --mac-host other || ok=1
+  setup_expect_fail --yes || ok=1
+  setup_expect_fail --mac-user alex --mac-host mac || ok=1
+  setup_expect_fail --help --yes || ok=1
+  setup_expect_fail --non-interactive --yes --mac-user '-oProxyCommand=id' --mac-host mac || ok=1
+  setup_expect_fail --non-interactive --yes --mac-user alex --mac-host '$(printf hacked > "$HOME/executed")' || ok=1
+  setup_expect_fail --non-interactive --yes --mac-user '' --mac-host '' --workstation-user alex --workstation-host workstation || ok=1
+  set_config "${VALID_CONFIG}"
+  out="$(setup_run --non-interactive --yes --mac-user sam --mac-host new-mac.example.ts.net 2>&1)" || { fail "automation: ${out}"; ok=1; }
+  printf '%s\n' $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=new-mac.example.ts.net' > "${T}/expected-home/.config/jack/config"
+  untouched || ok=1
+  [[ ! -s "${T}/ts.log" && ! -s "${T}/ssh.log" ]] || { fail 'automation contacted device/network'; ok=1; }
+  # Replacing just workstation preserves the newly configured Mac.
+  setup_run --non-interactive --yes --workstation-user sam --workstation-host new-workstation > /dev/null || ok=1
+  printf '%s\n' $'WORKSTATION_USER=sam\nWORKSTATION_HOST=new-workstation\nMAC_USER=sam\nMAC_HOST=new-mac.example.ts.net' > "${T}/expected-home/.config/jack/config"
+  untouched || ok=1
+  setup_reset
+  return "${ok}"
+}
+
+check_setup_cancel_and_write_failure() {
+  local out rc response ok=0
+  setup_reset
+  set_config "${VALID_CONFIG}"
+  for response in no ''; do
+    printf 'mac\nnew-mac\nsam\n%s\n' "${response}" > "${T}/answers"
+    rc=0
+    out="$(setup_run < "${T}/answers" 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'cancellation accepted'; ok=1; }
+    untouched || ok=1
+  done
+  printf 'mac\nnew-mac\nsam\n' > "${T}/answers" # EOF at confirmation.
+  rc=0
+  out="$(setup_run < "${T}/answers" 2>&1)" || rc=$?
+  [[ "${rc}" -ne 0 ]] || { fail 'EOF accepted'; ok=1; }
+  untouched || ok=1
+  # Inject native-operation failure without depending on privilege/host permissions.
+  mv "${T}/bin-setup/mv" "${T}/mv-tool"
+  write_stub "${T}/bin-setup/mv" 'exit 1'
+  setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
+  rm -f "${T}/bin-setup/mv"
+  mv "${T}/mv-tool" "${T}/bin-setup/mv"
+  mv "${T}/bin-setup/mktemp" "${T}/mktemp-tool"
+  write_stub "${T}/bin-setup/mktemp" 'exit 1'
+  setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
+  rm -f "${T}/bin-setup/mktemp"
+  mv "${T}/mktemp-tool" "${T}/bin-setup/mktemp"
+  # A pre-existing lock must be retained and must not permit overwrite.
+  mkdir "${T}/home/.config/jack/.setup-lock" "${T}/expected-home/.config/jack/.setup-lock"
+  setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
+  rmdir "${T}/home/.config/jack/.setup-lock" "${T}/expected-home/.config/jack/.setup-lock"
+  # Simulate an independent edit after load but before save.
+  mv "${T}/bin-setup/tailscale" "${T}/tailscale-tool"
+  write_stub "${T}/bin-setup/tailscale" 'printf "# independent edit\n" >> "$HOME/.config/jack/config"; exit 1'
+  printf 'mac\nnew-mac\nsam\nyes\n' > "${T}/answers"
+  rc=0
+  out="$(setup_run < "${T}/answers" 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'changed during setup'; then fail 'concurrent edit overwritten'; ok=1; fi
+  printf '# independent edit\n' >> "${T}/expected-home/.config/jack/config"
+  untouched || ok=1
+  rm -f "${T}/bin-setup/tailscale"
+  mv "${T}/tailscale-tool" "${T}/bin-setup/tailscale"
+  chmod 777 "${T}/home/.config"
+  setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
+  chmod 700 "${T}/home/.config"
+  # Invalid existing config must not be discarded.
+  set_config 'UNSUPPORTED=value'
+  setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
+  setup_reset
+  # Refuse symlinks to files and parent directories without modifying their targets.
+  mkdir -p "${T}/home/.config/jack" "${T}/expected-home/.config/jack"
+  printf 'unrelated\n' > "${T}/unrelated"
+  ln -s "${T}/unrelated" "${T}/home/.config/jack/config"
+  ln -s "${T}/unrelated" "${T}/expected-home/.config/jack/config"
+  setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
+  [[ "$(cat "${T}/unrelated")" == unrelated ]] || { fail 'symlink target changed'; ok=1; }
+  setup_reset
+  mkdir "${T}/unrelated-dir"
+  ln -s "${T}/unrelated-dir" "${T}/home/.config"
+  ln -s "${T}/unrelated-dir" "${T}/expected-home/.config"
+  setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
+  [[ -z "$(ls -A "${T}/unrelated-dir")" ]] || { fail 'symlink parent followed'; ok=1; }
+  setup_reset
+  return "${ok}"
+}
+
+check_setup_discovery_fallback() {
+  local fixture out rc ok=0
+  # JSON is deliberately neither parsed nor displayed in dependency-free mode.
+  # Test valid, empty, malformed, and malicious responses as untrusted bytes.
+  for fixture in '{"BackendState":"Running","Peer":{"p":{"DNSName":"peer.example.ts.net","TailscaleIPs":["100.101.102.103"]}}}' \
+    '{"BackendState":"Running","Peer":{}}' 'not-json' \
+    '{"Peer":{"p":{"DNSName":"$(printf hacked > \"$HOME/executed\")"}}}'; do
+    setup_reset
+    printf '%s\n' "${fixture}" > "${T}/discovery-output"
+    printf 'mac\nmanual-mac\nalex\nyes\n' > "${T}/answers"
+    rc=0
+    out="$(setup_run < "${T}/answers" 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'enter destinations manually'; then fail 'discovery fallback'; ok=1; fi
+    mkdir -p "${T}/expected-home/.config/jack"
+    printf '%s\n' $'MAC_USER=alex\nMAC_HOST=manual-mac' > "${T}/expected-home/.config/jack/config"
+    untouched || ok=1
+    if contains "${out}" 'hacked' || contains "${out}" 'not-json'; then fail 'untrusted output displayed'; ok=1; fi
+    [[ ! -e "${T}/home/executed" ]] || { fail 'discovery executed'; ok=1; }
+  done
+  for fixture in disconnected unavailable; do
+    setup_reset
+    if [[ "${fixture}" == unavailable ]]; then mv "${T}/bin-setup/tailscale" "${T}/tailscale-tool"; fi
+    printf 'mac\nmanual-mac\nalex\nyes\n' > "${T}/answers"
+    rc=0
+    out="$(setup_run < "${T}/answers" 2>&1)" || rc=$?
+    if [[ "${fixture}" == unavailable ]]; then
+      mv "${T}/tailscale-tool" "${T}/bin-setup/tailscale"
+      contains "${out}" 'CLI unavailable' || ok=1
+    else
+      contains "${out}" 'disconnected' || ok=1
+    fi
+    [[ "${rc}" -eq 0 ]] || { fail 'offline manual setup'; ok=1; }
+    mkdir -p "${T}/expected-home/.config/jack"
+    printf '%s\n' $'MAC_USER=alex\nMAC_HOST=manual-mac' > "${T}/expected-home/.config/jack/config"
+    untouched || ok=1
+  done
+  setup_reset
+  return "${ok}"
+}
+
 installer_refuses() { # label pathdir os script expected-text
   local out rc=0
   FAKE_OS="$3"
@@ -362,6 +558,10 @@ run_check UNKNOWN_ARGUMENT check_unknown_argument
 run_check OFFLINE_STATUS check_offline_status
 run_check CONFIG_ERRORS check_config_errors
 run_check CONFIG_ROUTING check_config_routing
+run_check SETUP_INTERACTIVE check_setup_interactive
+run_check SETUP_AUTOMATION check_setup_automation
+run_check SETUP_CANCEL_WRITE_FAILURE check_setup_cancel_and_write_failure
+run_check SETUP_DISCOVERY_FALLBACK check_setup_discovery_fallback
 run_check INSTALLER_REFUSAL check_installer_refusal
 
 if command -v shellcheck >/dev/null 2>&1; then

@@ -7,6 +7,79 @@ Mac         → jack     → Tailscale → Tailscale SSH           → Workstati
 Workstation → jack mac → Tailscale → macOS Remote Login (SSH) → Mac
 ```
 
+## Quick Start
+
+After [installing JACK](#install-on-mac) on macOS or
+[Arch/CachyOS](#install-on-the-workstation-arch--cachyos), run:
+
+```bash
+jack setup
+jack --status
+jack          # workstation
+jack mac      # Mac
+```
+
+Setup asks whether to configure the workstation, Mac, or both; enter each
+selected device's tailnet IPv4/hostname and SSH account. It previews the result
+and saves only when you type `yes`. No existing destination is silently reused
+as the target you are editing. Updating one destination preserves the other.
+Use the other device's address, not this computer's address.
+
+### Setup options and automation
+
+```bash
+jack setup --help
+jack setup --non-interactive --yes \
+  --workstation-user alex --workstation-host workstation.example.ts.net
+```
+
+For a Mac, use `--mac-user` and `--mac-host`. Supply both pairs to configure both
+at once. Automation requires at least one complete pair, `--non-interactive`,
+and `--yes`, which explicitly authorizes creation or replacement of the config.
+It never prompts or contacts Tailscale. Missing values, duplicate options,
+unknown options, and invalid identities fail without saving. Destination options
+and `--yes` require `--non-interactive`; there are no implicit target defaults.
+
+Interactive setup reads answers from standard input. Declining confirmation or
+ending input cancels with a non-zero exit and leaves configuration unchanged.
+`jack setup --help` does not read or write configuration.
+
+### Discovery and Tailscale status
+
+This version uses a **manual discovery fallback**: Bash and the baseline native
+tools do not provide a general JSON parser, and setup adds no parser dependency.
+It does not parse JSON or select peers from `tailscale status --json`. Find the
+other device in the Tailscale app/admin console, then enter its IPv4 address or
+MagicDNS hostname. No peers are automatically trusted, selected, or contacted.
+
+Interactive setup checks for the Tailscale CLI and runs
+`tailscale status --peers=false --self=false`, discarding all output. Success
+means Tailscale reports running or starting; it does not verify a completed
+connection. Failure reports unavailable/disconnected status. Manual setup still
+works when Tailscale is missing, stopped, or unavailable; install/connect it
+separately before using remote access. Discovery/reachability never proves SSH
+authorization, and setup does not label a device READY or test SSH authentication.
+
+### Saving safely
+
+Setup uses the existing four-key config and identity rules below. It refuses
+invalid existing configuration rather than discarding it; fix that file manually
+before retrying. It rewrites configuration in canonical key order, preserving
+other device entries but removing comments. Every interactive save requires an
+explicit `yes`, including replacements; automation's `--yes` provides that consent.
+
+Saves use a private same-directory temporary file, mode `600`, and atomic rename;
+the JACK configuration directory is restricted to mode `700`. A setup lock and
+content recheck guard against overlapping saves. Failed writes preserve an
+existing config and clean up temporary files. After an abrupt process kill, a
+`.setup-lock` directory may remain; inspect it and ensure no setup is running
+before removing it manually. Setup refuses symlink configuration paths, non-owned
+paths, and group/other-writable configuration directories (including HOME).
+Users with symlink-managed config can use the manual alternative below.
+
+Setup stores no secrets and performs no installation, service changes, sudo,
+SSH connections, key creation/upload, ACL changes, or SSH-policy changes.
+
 ## Usage
 
 ```bash
@@ -16,7 +89,7 @@ jack --status  # show configured devices and reachability
 jack --help    # show usage and configuration guidance
 ```
 
-## Configure destinations
+## Manual configuration alternative
 
 JACK reads `$HOME/.config/jack/config`. From the repository checkout:
 
@@ -66,8 +139,8 @@ JACK does not verify that a configured hostname belongs to your tailnet.
 ### Migrating from earlier versions
 
 Previous versions embedded the original developer's destinations. Those defaults
-are removed with no fallback. Create this configuration on each machine and
-explicitly enter your own accounts and addresses before using `jack` or
+are removed with no fallback. Run `jack setup` on each machine (or create the
+file manually) and explicitly enter your own accounts and addresses before using `jack` or
 `jack mac`. Installers do not create or migrate configuration. Uninstall leaves
 your configuration in place. Missing configuration never connects anywhere.
 
