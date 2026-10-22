@@ -77,7 +77,7 @@ Each slice has: one focused goal; explicit scope and exclusions; acceptance crit
 ## 6. Validation
 
 - Canonical local check: `./scripts/dev-check.sh`. It is read-only, offline, deterministic, and runs on macOS (Bash 3.2) and Linux with no Tailscale, SSH, sudo, or Homebrew. It is also what CI runs.
-- Never run `scripts/setup-*.sh` to validate code (they install software, use sudo, edit shell files). Never run a live `jack --status`, `jack`, or `jack mac` as a required check: they touch the real tailnet and results depend on the machine.
+- Never run `scripts/setup-*.sh` against the real HOME to validate code (they manage the installed CLI symlink). Installer checks must use isolated temporary HOME directories and command stubs. Never run a live `jack --status`, `jack`, or `jack mac` as a required check: they touch the real tailnet and results depend on the machine.
 - Do not validate with `bash -n a b c`: Bash checks only the first file.
 - Keep checks deterministic; preserve backwards compatibility of commands and install/uninstall behavior.
 - Boundaries: CI is Ubuntu only. macOS behavior is verified by running `dev-check.sh` on a Mac and must be reported as such; do not claim macOS PASS without that run. Live end-to-end (real SSH over Tailscale) is separate from static checks; without it, state "no E2E". Report blocked and unverified items as such.

@@ -17,7 +17,7 @@ cd jack
 
 `dev-check.sh` is read-only and offline. It uses stubs, so it needs no Tailscale, SSH, sudo, or Homebrew and changes nothing on your machine. It exits non-zero if any check fails.
 
-**Do not run `setup-macos.sh` or `setup-workstation.sh` to validate code.** Those are end-user installers: they install Tailscale, use `sudo`, and edit shell startup files. Installation and Tailscale setup are described in the [README](README.md).
+**Do not run `setup-macos.sh` or `setup-workstation.sh` to validate code.** Those manage the end-user CLI symlink and require consent. `dev-check.sh` tests them only with isolated temporary HOME directories and command stubs. Installation and Tailscale setup are described in the [README](README.md).
 
 ## Making a change
 
