@@ -48,7 +48,7 @@ TRIPWIRE='printf "%s\n" "${0##*/} $*" >> "${STUB_LOG:-/dev/null}"; exit 99'
 
 make_fixtures() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/jack-dev-check.XXXXXX")" || return 1
-  mkdir "${T}/home" "${T}/expected-home" "${T}/bin-setup" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
+  mkdir "${T}/home" "${T}/expected-home" "${T}/bin-setup" "${T}/bin-discovery" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
   : > "${T}/calls.log"
   : > "${T}/ts.log"
   : > "${T}/ssh.log"
@@ -82,6 +82,10 @@ exit 99'
 if [ "$1" != status ]; then exit 99; fi
 if [ -s "${DISCOVERY_OUTPUT}" ]; then cat "${DISCOVERY_OUTPUT}"; exit 0; fi
 exit 1'
+
+  for n in "${T}/bin-setup/"*; do
+    ln -s "${n}" "${T}/bin-discovery/${n##*/}"
+  done
 
   # Installer fixtures: fake OS name, tripwires for anything that would mutate.
   for d in bin-linux bin-darwin bin-nopacman; do
@@ -368,7 +372,7 @@ check_setup_interactive() {
     mkdir -p "${T}/expected-home/.config/jack"
     printf '%s\n' "${set_expected}" > "${T}/expected-home/.config/jack/config"
     untouched || ok=1
-    [[ "$(cat "${T}/ts.log")" == 'status --peers=false --self=false' ]] || { fail 'unexpected Tailscale operation'; ok=1; }
+    [[ ! -s "${T}/ts.log" ]] || { fail 'parser-absent setup invoked discovery'; ok=1; }
     # Portable find permission predicates: exact private modes.
     [[ -n "$(find "${T}/home/.config/jack/config" -perm 600 -print)" ]] || { fail 'config permissions'; ok=1; }
     [[ -n "$(find "${T}/home/.config/jack" -prune -perm 700 -print)" ]] || { fail 'directory permissions'; ok=1; }
@@ -438,6 +442,7 @@ check_setup_cancel_and_write_failure() {
   setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
   rmdir "${T}/home/.config/jack/.setup-lock" "${T}/expected-home/.config/jack/.setup-lock"
   # Simulate an independent edit after load but before save.
+  write_stub "${T}/bin-setup/python3" 'exit 1'
   mv "${T}/bin-setup/tailscale" "${T}/tailscale-tool"
   write_stub "${T}/bin-setup/tailscale" 'printf "# independent edit\n" >> "$HOME/.config/jack/config"; exit 1'
   printf 'mac\nnew-mac\nsam\nyes\n' > "${T}/answers"
@@ -448,6 +453,7 @@ check_setup_cancel_and_write_failure() {
   untouched || ok=1
   rm -f "${T}/bin-setup/tailscale"
   mv "${T}/tailscale-tool" "${T}/bin-setup/tailscale"
+  rm -f "${T}/bin-setup/python3"
   chmod 777 "${T}/home/.config"
   setup_expect_fail --non-interactive --yes --mac-user sam --mac-host new-mac || ok=1
   chmod 700 "${T}/home/.config"
@@ -501,7 +507,7 @@ check_setup_discovery_fallback() {
       mv "${T}/tailscale-tool" "${T}/bin-setup/tailscale"
       contains "${out}" 'CLI unavailable' || ok=1
     else
-      contains "${out}" 'disconnected' || ok=1
+      contains "${out}" 'parser unavailable' || ok=1
     fi
     [[ "${rc}" -eq 0 ]] || { fail 'offline manual setup'; ok=1; }
     mkdir -p "${T}/expected-home/.config/jack"
@@ -509,6 +515,180 @@ check_setup_discovery_fallback() {
     untouched || ok=1
   done
   setup_reset
+  return "${ok}"
+}
+
+# Python is optional in production. When available, exercise the real isolated
+# standard-library parser against only stubbed Tailscale output.
+DISCOVERY_VALID='{
+  "BackendState":"Running",
+  "Self":{"ID":"local-id","PublicKey":"local-key","TailscaleIPs":["100.64.1.1"]},
+  "Peer":{
+    "z":{"ID":"remote-z","DNSName":"shared.example.ts.net.","TailscaleIPs":["fd7a::3","100.64.1.20"]},
+    "a":{"ID":"remote-a","DNSName":"shared.example.ts.net.","TailscaleIPs":["100.64.1.3"]},
+    "self-id":{"ID":"local-id","DNSName":"LOCAL-BY-ID","TailscaleIPs":["100.64.1.90"]},
+    "local-key":{"DNSName":"LOCAL-BY-KEY","TailscaleIPs":["100.64.1.91"]},
+    "self-ip":{"ID":"other-id","DNSName":"LOCAL-BY-IP","TailscaleIPs":["100.64.1.1"]}
+  },
+  "Unexpected":{"data":"ignored"}
+}'
+
+discovery_run() {
+  run_iso "${T}/bin-discovery" "${JACK}" setup "$@"
+}
+
+discovery_expected() {
+  mkdir -p "${T}/expected-home/.config/jack"
+  printf '%s\n' "$1" > "${T}/expected-home/.config/jack/config"
+}
+
+check_discovery_selection() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo 'DISCOVERY_PARSER=SKIP (optional Python 3 unavailable; fallback only)'
+    return 0
+  fi
+  link_tool "${T}/bin-discovery" python3 || return 1
+  local out rc role ok=0
+  for role in workstation mac both; do
+    setup_reset
+    printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
+    case "${role}" in
+      workstation) printf 'workstation\n1\nalex\nyes\n' > "${T}/answers" ;;
+      mac) printf 'mac\n2\nalex\nyes\n' > "${T}/answers" ;;
+      both) printf 'both\n1\nalex\n2\nsam\nyes\n' > "${T}/answers" ;;
+    esac
+    rc=0
+    out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '1) shared.example.ts.net — 100.64.1.3' || ! contains "${out}" '2) shared.example.ts.net — 100.64.1.20'; then
+      fail "discovery selection ${role}: ${out}"; ok=1
+    fi
+    if contains "${out}" LOCAL-BY; then fail 'local device offered'; ok=1; fi
+    case "${role}" in
+      workstation) discovery_expected $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.3' ;;
+      mac) discovery_expected $'MAC_USER=alex\nMAC_HOST=100.64.1.20' ;;
+      both) discovery_expected $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.3\nMAC_USER=sam\nMAC_HOST=100.64.1.20' ;;
+    esac
+    untouched || ok=1
+    [[ "$(cat "${T}/ts.log")" == 'status --json' ]] || { fail 'unexpected discovery command'; ok=1; }
+    [[ -n "$(find "${T}/home/.config/jack/config" -perm 600 -print)" ]] || { fail 'discovery config permissions'; ok=1; }
+    [[ -n "$(find "${T}/home/.config/jack" -prune -perm 700 -print)" ]] || { fail 'discovery directory permissions'; ok=1; }
+  done
+  # Manual entry remains explicit even with valid peers.
+  setup_reset
+  printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
+  printf 'mac\n0\nmanual-mac\nalex\nyes\n' > "${T}/answers"
+  discovery_run < "${T}/answers" >/dev/null 2>&1 || { fail 'explicit manual entry'; ok=1; }
+  discovery_expected $'MAC_USER=alex\nMAC_HOST=manual-mac'
+  untouched || ok=1
+  # Updating one role preserves the other and cancellation keeps exact bytes.
+  set_config "${VALID_CONFIG}"
+  printf 'mac\n2\nsam\nno\n' > "${T}/answers"
+  rc=0
+  out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+  [[ "${rc}" -ne 0 ]] || { fail 'discovery cancellation saved'; ok=1; }
+  untouched || ok=1
+  printf 'mac\n2\nsam\nyes\n' > "${T}/answers"
+  discovery_run < "${T}/answers" >/dev/null 2>&1 || { fail 'preserved destination setup'; ok=1; }
+  discovery_expected $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.101.102.103\nMAC_USER=sam\nMAC_HOST=100.64.1.20'
+  untouched || ok=1
+  # Same peer for both roles requires its own consent before final confirmation.
+  setup_reset
+  printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
+  printf 'both\n1\nalex\n1\nsam\nno\n' > "${T}/answers"
+  rc=0
+  out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'duplicate destination not confirmed'; then fail 'duplicate destination accepted'; ok=1; fi
+  untouched || ok=1
+  printf 'both\n1\nalex\n1\nsam\nyes\nyes\n' > "${T}/answers"
+  discovery_run < "${T}/answers" >/dev/null 2>&1 || { fail 'confirmed duplicate rejected'; ok=1; }
+  discovery_expected $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.3\nMAC_USER=sam\nMAC_HOST=100.64.1.3'
+  untouched || ok=1
+  # Automation ignores available discovery/parser and remains prompt-free.
+  setup_reset
+  printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
+  discovery_run --non-interactive --yes --workstation-user alex --workstation-host 100.64.1.3 --mac-user sam --mac-host 100.64.1.3 < /dev/null > /dev/null || { fail 'discovery affected automation'; ok=1; }
+  discovery_expected $'WORKSTATION_USER=alex\nWORKSTATION_HOST=100.64.1.3\nMAC_USER=sam\nMAC_HOST=100.64.1.3'
+  untouched || ok=1
+  [[ ! -s "${T}/ts.log" ]] || { fail 'automation called Tailscale'; ok=1; }
+  setup_reset
+  rm -f "${T}/bin-discovery/python3"
+  return "${ok}"
+}
+
+check_discovery_untrusted() {
+  if ! command -v python3 >/dev/null 2>&1; then return 0; fi
+  link_tool "${T}/bin-discovery" python3 || return 1
+  local out rc fixture choice ok=0
+  for fixture in 'not-json' '{}' 'null' '[]' \
+    '{"BackendState":"Stopped"}' \
+    '{"BackendState":"Running","Self":{"TailscaleIPs":["100.64.1.1"]}}' \
+    '{"BackendState":"Running","Self":null,"Peer":null}' \
+    '{"BackendState":"Running","TailscaleIPs":["100.64.1.1"],"Peer":null}' \
+    '{"BackendState":"Running","Self":{"TailscaleIPs":["100.64.1.1"]},"Peer":{"bad":null,"missing":{}}}' \
+    '{"BackendState":"Running","TailscaleIPs":["100.64.1.1"],"Peer":[]}' \
+    '{"BackendState":"Running","BackendState":"Stopped"}' \
+    '{"BackendState":"Running","TailscaleIPs":["100.64.1.1"],"Peer":{"x":{"TailscaleIPs":["192.168.1.1","100.128.1.1","100.64.999.1","0100.64.1.2","-host","host;id","100.64.1.2:22"]}}}'; do
+    setup_reset
+    printf '%s\n' "${fixture}" > "${T}/discovery-output"
+    printf 'mac\nmanual-mac\nalex\nyes\n' > "${T}/answers"
+    rc=0
+    out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'enter destinations manually'; then fail 'invalid/no peers blocked manual setup'; ok=1; fi
+    discovery_expected $'MAC_USER=alex\nMAC_HOST=manual-mac'
+    untouched || ok=1
+  done
+  setup_reset
+  printf '%s\n' '{"BackendState":"Running","TailscaleIPs":["100.64.1.1"],"Self":null,"Peer":{
+    "a":{"DNSName":"$(printf hacked > \"$HOME/executed\")\u001b[31m\n\t\u0007\u202e","TailscaleIPs":["100.64.1.2"]},
+    "b":{"DNSName":null,"HostName":null,"TailscaleIPs":["100.64.1.4"]},
+    "c":{"DNSName":"same-name","TailscaleIPs":["100.64.1.5","100.64.1.5"]},
+    "d":{"DNSName":"other-name","TailscaleIPs":["100.64.1.5"]},
+    "e":{"DNSName":{"unexpected":"object"},"TailscaleIPs":["100.64.1.6"]},
+    "f":{"DNSName":"IPv6-only","TailscaleIPs":["fd7a::3"]}
+  }}' > "${T}/discovery-output"
+  printf 'mac\n1\nalex\nyes\n' > "${T}/answers"
+  rc=0
+  out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+  [[ "${rc}" -eq 0 ]] || { fail 'unusual names rejected usable peers'; ok=1; }
+  if contains "${out}" $'\033' || contains "${out}" $'\a' || contains "${out}" '$(' || contains "${out}" 'IPv6-only'; then fail 'unsafe display or IPv6 destination'; ok=1; fi
+  contains "${out}" '2) Unnamed peer — 100.64.1.4' || { fail 'null name handling'; ok=1; }
+  contains "${out}" '3) Multiple peers sharing address — 100.64.1.5' || { fail 'duplicate address handling'; ok=1; }
+  contains "${out}" '4) Unnamed peer — 100.64.1.6' || { fail 'unexpected name handling'; ok=1; }
+  discovery_expected $'MAC_USER=alex\nMAC_HOST=100.64.1.2'
+  untouched || ok=1
+  # Invalid/out-of-range choices never default to the first peer.
+  for choice in '' 9999 '-1' '01' '$(id)'; do
+    setup_reset
+    printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
+    printf 'mac\n%s\n' "${choice}" > "${T}/answers"
+    rc=0
+    out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+    [[ "${rc}" -ne 0 ]] || { fail 'invalid choice selected a peer'; ok=1; }
+    untouched || ok=1
+  done
+  # Bounded input and failures of the Tailscale producer must fall back too.
+  setup_reset
+  printf '%1048577s' '' > "${T}/discovery-output"
+  printf 'mac\nmanual-mac\nalex\nyes\n' > "${T}/answers"
+  rc=0
+  out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'enter destinations manually'; then fail 'oversized status fallback'; ok=1; fi
+  discovery_expected $'MAC_USER=alex\nMAC_HOST=manual-mac'
+  untouched || ok=1
+  setup_reset
+  printf '%s\n' "${DISCOVERY_VALID}" > "${T}/discovery-output"
+  mv "${T}/bin-setup/tailscale" "${T}/tailscale-tool"
+  write_stub "${T}/bin-setup/tailscale" 'cat "${DISCOVERY_OUTPUT}"; exit 1'
+  printf 'mac\nmanual-mac\nalex\nyes\n' > "${T}/answers"
+  rc=0
+  out="$(discovery_run < "${T}/answers" 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'enter destinations manually'; then fail 'failed producer fallback'; ok=1; fi
+  discovery_expected $'MAC_USER=alex\nMAC_HOST=manual-mac'
+  untouched || ok=1
+  rm -f "${T}/bin-setup/tailscale"
+  mv "${T}/tailscale-tool" "${T}/bin-setup/tailscale"
+  setup_reset
+  rm -f "${T}/bin-discovery/python3"
   return "${ok}"
 }
 
@@ -562,6 +742,13 @@ run_check SETUP_INTERACTIVE check_setup_interactive
 run_check SETUP_AUTOMATION check_setup_automation
 run_check SETUP_CANCEL_WRITE_FAILURE check_setup_cancel_and_write_failure
 run_check SETUP_DISCOVERY_FALLBACK check_setup_discovery_fallback
+if command -v python3 >/dev/null 2>&1; then
+  run_check DISCOVERY_SELECTION check_discovery_selection
+  run_check DISCOVERY_UNTRUSTED check_discovery_untrusted
+else
+  echo 'DISCOVERY_SELECTION=SKIP (optional Python 3 unavailable)'
+  echo 'DISCOVERY_UNTRUSTED=SKIP (fallback tested; full discovery not verified)'
+fi
 run_check INSTALLER_REFUSAL check_installer_refusal
 
 if command -v shellcheck >/dev/null 2>&1; then

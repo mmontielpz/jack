@@ -7,7 +7,7 @@ Canonical, lightweight workflow for humans and AI agents working on JACK. Contri
 - JACK is an open-source remote-access tool. Simplicity first.
 - Audience: technical and nontechnical users.
 - Long-term goals: terminal and graphical access, cross-platform.
-- **Today** JACK is a minimal Bash + Tailscale + SSH utility (`bin/jack`, `scripts/`). Graphical access, Windows, and device discovery are roadmap, not implemented. Docs and reports must never present roadmap as current behavior.
+- **Today** JACK is a minimal Bash + Tailscale + SSH utility (`bin/jack`, `scripts/`), with guided setup and optional Tailscale peer discovery. Graphical access and Windows are roadmap, not implemented. Docs and reports must never present roadmap as current behavior.
 
 ## 2. Authority
 
