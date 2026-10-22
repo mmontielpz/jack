@@ -12,8 +12,64 @@ Workstation → jack mac → Tailscale → macOS Remote Login (SSH) → Mac
 ```bash
 jack           # connect to the workstation
 jack mac       # connect to the Mac
-jack --status  # show status
+jack --status  # show configured devices and reachability
+jack --help    # show usage and configuration guidance
 ```
+
+## Configure destinations
+
+JACK reads `$HOME/.config/jack/config`. From the repository checkout:
+
+```bash
+mkdir -p "$HOME/.config/jack"
+cp config.example "$HOME/.config/jack/config"
+```
+
+If you already have a config, edit it rather than overwriting it. Replace the
+illustrative values with your own destination accounts and tailnet addresses:
+
+```text
+WORKSTATION_USER=alex
+WORKSTATION_HOST=100.101.102.103
+MAC_USER=alex
+MAC_HOST=100.104.105.106
+```
+
+On each destination, find its Tailscale IPv4 address in the Tailscale app or
+admin console, or with `tailscale ip -4`. A Tailscale DNS/MagicDNS hostname is
+also accepted. Use the SSH account on that destination, not your local account.
+`jack` selects WORKSTATION; `jack mac` selects MAC. Set both USER and HOST keys
+for each destination you use; omit both keys for an unused destination.
+An incomplete destination cannot connect, but the other complete one can.
+
+The format is literal `KEY=VALUE`: no spaces around `=`, quotes, expansions,
+inline comments, or executable shell syntax. Blank lines and full-line comments
+are allowed. Duplicate/unsupported keys, empty values, and malformed identities
+are errors and prevent all connections. Configuration is never executed.
+Usernames start with an ASCII letter or underscore and contain only ASCII
+letters, digits, underscores, dots, or hyphens (maximum 64 characters).
+Hosts accept canonical IPv4 or DNS labels (letters/digits with internal hyphens,
+maximum 63 characters per label and 253 overall). IPv6, ports, trailing dots,
+SSH options, and shell metacharacters are unsupported. Store no credentials or
+private keys in this file. Use your SSH agent and normal SSH authentication.
+
+`jack --help` works without configuration. To validate syntax and identities,
+run `jack --status`: it rejects invalid configuration before network operations.
+With valid configuration it queries Tailscale and probes configured devices.
+Status distinguishes configured/unconfigured and reachable/unreachable/unknown;
+it exits non-zero if either device is unconfigured, either is not reachable,
+or a required client is unavailable. Reachability does not prove SSH access or
+authentication; only a real SSH session can do that. SSH host verification
+continues to use your existing OpenSSH policy. Use tailnet addresses only;
+JACK does not verify that a configured hostname belongs to your tailnet.
+
+### Migrating from earlier versions
+
+Previous versions embedded the original developer's destinations. Those defaults
+are removed with no fallback. Create this configuration on each machine and
+explicitly enter your own accounts and addresses before using `jack` or
+`jack mac`. Installers do not create or migrate configuration. Uninstall leaves
+your configuration in place. Missing configuration never connects anywhere.
 
 ## Install on Mac
 
@@ -38,18 +94,19 @@ touches the firewall. If Tailscale is not logged in yet, it tells you to run
 
 ## Reverse access: workstation → Mac
 
-`jack mac` uses standard OpenSSH over Tailscale to `mlopez@100.76.175.55`.
+`jack mac` uses standard OpenSSH over Tailscale to your configured Mac.
 On the Mac, once:
 
 1. System Settings → General → Sharing → **Remote Login** → On.
-   Under "Allow access for", choose **Only these users** → `mlopez`.
+   Under "Allow access for", choose **Only these users** → your configured Mac account.
 2. Authorize the workstation's public key. On the workstation:
 
    ```bash
-   ssh-copy-id -i ~/.ssh/id_ed25519.pub mlopez@100.76.175.55
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub alex@mac.example.ts.net
    ```
 
-   This asks for the Mac password once; afterwards `jack mac` uses the key.
+   Replace the example destination with your configured Mac account and tailnet
+   host. This may ask for the Mac password; afterwards `jack mac` uses the key.
 
 Do not forward port 22 on your router. The Mac is only reached over Tailscale.
 
