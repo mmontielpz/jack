@@ -85,3 +85,10 @@ and executing stable code inside a session does not verify stable-initiated SSH.
 See [open decisions](release-notes-0.1.0.md#open-release-checklist-and-owner-decisions)
 before merging or publishing. Additional lifecycle automation is a post-v0.1.0
 follow-up; the existing acceptance and authorization gates remain unchanged.
+
+The [Slice 14K1 owner acceptance record](release-notes-0.1.0.md#owner-acceptance-decisions--slice-14k1)
+accepts macOS and SSH/setup with documented limitations and accepts the current
+branding for v0.1.0; further visual work is deferred. This records owner decisions,
+not newly executed tests. PARTIAL and NOT_TESTED evidence remains unchanged.
+Mac sandbox cleanup is PENDING operational follow-up; fixture preservation is not
+verified. Merge and release authorization are both NO.

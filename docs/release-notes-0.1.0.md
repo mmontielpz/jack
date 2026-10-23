@@ -110,12 +110,12 @@ live connections were performed for this update; existing offline checks were re
 | --- | --- | --- |
 | Stable identity and automated checks | PASS for recorded stable SHA | Documentation-only updates must pass current required PR CI; freeze final reviewed SHA |
 | CachyOS isolated lifecycle and preservation | PASS | Evidence scope is disposable HOME; no destructive real-installation cycle claimed |
-| macOS lifecycle/preservation/cleanup | PARTIAL | Basic lifecycle/original RC preservation owner-reported PASS; confirm fixture preservation and sandbox cleanup or explicitly disposition unresolved coverage |
-| Source upgrade | PARTIAL | Native CachyOS isolated path PASS; macOS NOT_TESTED. Owner must supply native Mac evidence or explicitly decide whether Linux coverage suffices |
-| Full per-platform setup checklist | PARTIAL | Offline fixtures PASS; actual discovery/manual, noninteractive, cancellation and preservation cases are not individually documented for both machines. Owner supplies evidence or explicit coverage decision |
-| Stable-initiated SSH | NOT_TESTED | Owner must authorize any additional connection-specific test or explicitly accept RC evidence given the version-only CLI change; existing sessions do not imply this approval |
-| Precise platform/build record | PARTIAL | Exact Mac stable SHA now owner-reported; actual macOS/Bash/dependency version details and final release acceptance record remain to be supplied |
-| Final brand visual acceptance | NOT_TESTED | Explicit owner approval or documented deferral decision remains outstanding |
+| macOS lifecycle/preservation/cleanup | PARTIAL | Owner accepts macOS with documented limitations (Slice 14K1). Fixture preservation remains NOT VERIFIED; sandbox cleanup remains PENDING as an operational follow-up |
+| Source upgrade | PARTIAL | Native CachyOS isolated path PASS; macOS NOT_TESTED remains a documented limitation under the owner macOS acceptance; no native Mac result is inferred |
+| Full per-platform setup checklist | PARTIAL | Owner accepts SSH/setup with documented limitations. Offline fixtures PASS; incomplete actual-machine case attribution remains unchanged, not converted to test PASS |
+| Stable-initiated SSH | NOT_TESTED | Owner accepts SSH/setup with documented limitations; stable initiation remains NOT VERIFIED. No new connection is authorized or claimed executed |
+| Precise platform/build record | PARTIAL | Exact Mac stable SHA is owner-reported; missing macOS/Bash/dependency details remain unverified under documented macOS limitations. Final merged SHA still requires separate authorization and verification |
+| Additional branding visual-test execution | NOT_TESTED | Owner explicitly accepts the current identity for v0.1.0 (Slice 14K1); this is an acceptance decision, not a newly executed visual test. Further visual work is deferred |
 | Final SHA / merge / release authorization | NOT_TESTED | PR remains review-only; owner must separately authorize merge/publication and verify synchronized final main |
 
 No pending item is marked WAIVED. The optional native Mac ShellCheck SKIP is not
@@ -123,6 +123,29 @@ a failed product test. AUTH_REQUIRED blocks the agent's unattended transport,
 not normal owner-operated SSH; changing credentials is not a release requirement.
 Historical slice facts remain unchanged. No private accounts, device names,
 addresses, filesystem locations or raw tailnet diagnostics are included here.
+
+## Owner acceptance decisions — Slice 14K1
+
+The Product Owner explicitly supplied the following v0.1.0 decisions after
+reviewing the documented evidence and limitations. These are owner acceptance
+decisions, not new test execution or independent agent verification. They do not
+change the historical RC results or the stable evidence table above.
+
+| Decision | Owner value | Meaning and boundary |
+| --- | --- | --- |
+| MACOS | ACCEPT_WITH_DOCUMENTED_LIMITATIONS | Accept the reported macOS results and documented limitations for v0.1.0; fixture preservation is still NOT VERIFIED, source upgrade NOT_TESTED, and cleanup PENDING |
+| SSH_SETUP | ACCEPT_WITH_DOCUMENTED_LIMITATIONS | Accept the documented SSH/setup coverage limitations; stable-initiated SSH remains NOT VERIFIED and unattended transport remains AUTH_REQUIRED; no authentication changes or new SSH sessions authorized |
+| BRANDING | ACCEPT_CURRENT_IDENTITY_FOR_V0.1.0 | Current JACK identity accepted for v0.1.0; further visual branding work deferred; no additional rendering or visual tests claimed |
+| MACOS_SANDBOX_CLEANUP | PENDING | Visible operational follow-up: identify the test-owned sandbox, obtain any required cleanup approval and confirm safe cleanup; no cleanup has been executed or marked PASS by this record |
+| MERGE_AUTHORIZATION | NO | PR #15 remains open; merge and auto-merge are not authorized |
+| RELEASE_AUTHORIZATION | NO | No tag, release or publication is authorized |
+
+Evidence labeled PARTIAL or NOT_TESTED retains that status. No individual test
+is marked WAIVED or promoted to PASS by these decisions. Acceptance with documented
+limitations does not establish missing fixture preservation or sandbox cleanup.
+The remaining cleanup is operational follow-up; this record does not invent a
+cleanup waiver, execute cleanup, or turn product acceptance into permission to
+merge or publish. A final merged release SHA has not been assigned here.
 
 ### Post-v0.1.0 follow-up
 
