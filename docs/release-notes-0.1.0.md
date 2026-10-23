@@ -110,7 +110,7 @@ live connections were performed for this update; existing offline checks were re
 | --- | --- | --- |
 | Stable identity and automated checks | PASS for recorded stable SHA | Documentation-only updates must pass current required PR CI; freeze final reviewed SHA |
 | CachyOS isolated lifecycle and preservation | PASS | Evidence scope is disposable HOME; no destructive real-installation cycle claimed |
-| macOS lifecycle/preservation/cleanup | PARTIAL | Owner accepts macOS with documented limitations (Slice 14K1). Fixture preservation remains NOT VERIFIED; sandbox cleanup remains PENDING as an operational follow-up |
+| macOS lifecycle/preservation/cleanup | PARTIAL | Owner accepts macOS with documented limitations (Slice 14K1). Fixture preservation remains NOT VERIFIED; the exact sandbox path was subsequently confirmed ALREADY_ABSENT; synthetic fixture preservation remains NOT VERIFIED |
 | Source upgrade | PARTIAL | Native CachyOS isolated path PASS; macOS NOT_TESTED remains a documented limitation under the owner macOS acceptance; no native Mac result is inferred |
 | Full per-platform setup checklist | PARTIAL | Owner accepts SSH/setup with documented limitations. Offline fixtures PASS; incomplete actual-machine case attribution remains unchanged, not converted to test PASS |
 | Stable-initiated SSH | NOT_TESTED | Owner accepts SSH/setup with documented limitations; stable initiation remains NOT VERIFIED. No new connection is authorized or claimed executed |
@@ -133,19 +133,19 @@ change the historical RC results or the stable evidence table above.
 
 | Decision | Owner value | Meaning and boundary |
 | --- | --- | --- |
-| MACOS | ACCEPT_WITH_DOCUMENTED_LIMITATIONS | Accept the reported macOS results and documented limitations for v0.1.0; fixture preservation is still NOT VERIFIED, source upgrade NOT_TESTED, and cleanup PENDING |
+| MACOS | ACCEPT_WITH_DOCUMENTED_LIMITATIONS | Accept the reported macOS results and documented limitations for v0.1.0; fixture preservation is still NOT VERIFIED, source upgrade NOT_TESTED, and cleanup subsequently confirmed ALREADY_ABSENT |
 | SSH_SETUP | ACCEPT_WITH_DOCUMENTED_LIMITATIONS | Accept the documented SSH/setup coverage limitations; stable-initiated SSH remains NOT VERIFIED and unattended transport remains AUTH_REQUIRED; no authentication changes or new SSH sessions authorized |
 | BRANDING | ACCEPT_CURRENT_IDENTITY_FOR_V0.1.0 | Current JACK identity accepted for v0.1.0; further visual branding work deferred; no additional rendering or visual tests claimed |
-| MACOS_SANDBOX_CLEANUP | PENDING | Visible operational follow-up: identify the test-owned sandbox, obtain any required cleanup approval and confirm safe cleanup; no cleanup has been executed or marked PASS by this record |
-| MERGE_AUTHORIZATION | NO | PR #15 remains open; merge and auto-merge are not authorized |
+| MACOS_SANDBOX_CLEANUP | ALREADY_ABSENT (owner-reported subsequent check) | The exact disposable sandbox path was checked and found absent. No deletion occurred in that check; the removal time is unknown. Original installed RC version and symlink were confirmed unchanged |
+| MERGE_AUTHORIZATION | YES (subsequent owner authorization) | Owner authorized a final cleanup documentation update and merge of PR #15 to main. This does not authorize tagging or publication |
 | RELEASE_AUTHORIZATION | NO | No tag, release or publication is authorized |
 
 Evidence labeled PARTIAL or NOT_TESTED retains that status. No individual test
 is marked WAIVED or promoted to PASS by these decisions. Acceptance with documented
 limitations does not establish missing fixture preservation or sandbox cleanup.
-The remaining cleanup is operational follow-up; this record does not invent a
-cleanup waiver, execute cleanup, or turn product acceptance into permission to
-merge or publish. A final merged release SHA has not been assigned here.
+The subsequent owner check found the exact sandbox path already absent; it did
+not execute cleanup or establish synthetic fixture preservation. The owner
+separately authorized merge after this documentation update, but not publication. A final merged release SHA has not been assigned here.
 
 ### Post-v0.1.0 follow-up
 
