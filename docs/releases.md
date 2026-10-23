@@ -1,14 +1,15 @@
 # Planned release and version policy
 
-The current source identity is **0.1.0-rc.1**, a pre-release candidate identity
-for validation, not a published release or acceptance claim. No tag, GitHub
-release or package distribution is created by Slice 14B. See the
-[draft candidate notes](release-notes-0.1.0-rc.1.md).
+The prepared source identity is **0.1.0**, intended for a future `v0.1.0` tag.
+This is unpublished release preparation, not a release announcement, completed
+acceptance claim or authorization to publish. See the
+[stable release notes and acceptance evidence](release-notes-0.1.0.md).
+The [historical RC draft](release-notes-0.1.0-rc.1.md) remains unchanged.
 
 ## Authoritative identity
 
 `JACK_VERSION` in [bin/jack](../bin/jack) is the single authoritative version
-constant. `jack --version` prints `jack 0.1.0-rc.1` and exits 0 without reading
+constant. `jack --version` prints `jack 0.1.0` and exits 0 without reading
 configuration, writing files, querying Git or invoking network/dependency checks.
 It works without HOME or external commands; extra arguments are rejected.
 `jack doctor` uses the same constant. No companion VERSION file, runtime Git
@@ -72,3 +73,26 @@ Draft notes should identify the candidate/version and frozen SHA, supported
 platforms, verified changes, migration, dependencies, security reporting, known
 limitations and actual acceptance evidence. Populate post-merge SHA/CI facts only
 once verified; no release date or successful runtime acceptance may be invented.
+
+### Current acceptance record
+
+The [stable evidence and owner-decision matrix](release-notes-0.1.0.md#stable-acceptance-evidence--slice-14j)
+records the tested SHA and distinguishes direct agent/GitHub verification from
+owner reports. PASS, PARTIAL, NOT_TESTED and WAIVED have separate meanings;
+no owner waiver is inferred. In particular, CachyOS isolated lifecycle/upgrade
+success does not establish native Mac fixture preservation, cleanup or upgrade,
+and executing stable code inside a session does not verify stable-initiated SSH.
+See [open decisions](release-notes-0.1.0.md#open-release-checklist-and-owner-decisions)
+before merging or publishing. Additional lifecycle automation is a post-v0.1.0
+follow-up; the existing acceptance and authorization gates remain unchanged.
+
+The [Slice 14K1 owner acceptance record](release-notes-0.1.0.md#owner-acceptance-decisions--slice-14k1)
+accepts macOS and SSH/setup with documented limitations and accepts the current
+branding for v0.1.0; further visual work is deferred. This records owner decisions,
+not newly executed tests. PARTIAL and NOT_TESTED evidence remains unchanged.
+The owner subsequently confirmed that the exact macOS test sandbox path was
+ALREADY_ABSENT; the original installed RC version and symlink remained unchanged.
+This confirms no remaining cleanup at that path, but does not prove when it was
+removed or validate synthetic fixture preservation. The owner has separately
+authorized PR #15 merge after this documentation update; release publication
+remains unauthorized.

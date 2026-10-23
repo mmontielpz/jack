@@ -120,6 +120,27 @@ jack --help    # show usage and configuration guidance
 jack --version # report source version without configuration or network access
 ```
 
+## Direction and self-targeting
+
+Commands select a configured role, regardless of which machine runs JACK:
+
+| Typical source | Command | Configured destination |
+| --- | --- | --- |
+| Mac | `jack` | WORKSTATION (commonly the Linux workstation) |
+| CachyOS workstation | `jack mac` | MAC |
+
+`jack` always selects WORKSTATION; it does not automatically choose the other
+machine. If WORKSTATION points to the CachyOS machine you are using, running
+`jack` there attempts a self-connection. Discovery excludes the current device,
+but manual configuration accepts its address. This is a known limitation, not
+a direction-switching feature.
+
+A `Connection refused` error means the connection was rejected; it does not prove
+SSH authentication failed. Check that the configured destination is the intended
+remote machine and that its owner has enabled the appropriate receiving SSH
+service and access policy. Reachability alone does not establish a listening SSH
+service or authorization. JACK does not enable services or repair policies.
+
 ## Manual configuration alternative
 
 JACK reads `$HOME/.config/jack/config`. From the repository checkout, copy the

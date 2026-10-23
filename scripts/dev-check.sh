@@ -188,7 +188,7 @@ check_version() {
     esac
     rc=0
     out="$(run_iso "${T}/bin-version" "${T}/standalone-jack" --version 2>&1)" || rc=$?
-    if [[ "${rc}" -ne 0 || "${out}" != 'jack 0.1.0-rc.1' ]]; then
+    if [[ "${rc}" -ne 0 || "${out}" != 'jack 0.1.0' ]]; then
       fail "--version ${scenario}: unexpected result (rc=${rc})"; ok=1
     fi
     untouched || ok=1
@@ -196,7 +196,7 @@ check_version() {
   # Even an absent HOME and empty PATH need no fallback, files or commands.
   rc=0
   out="$(env -i PATH= "${BASH}" "${JACK}" --version 2>&1)" || rc=$?
-  [[ "${rc}" -eq 0 && "${out}" == 'jack 0.1.0-rc.1' ]] || { fail '--version requires environment/tools'; ok=1; }
+  [[ "${rc}" -eq 0 && "${out}" == 'jack 0.1.0' ]] || { fail '--version requires environment/tools'; ok=1; }
   rc=0
   out="$(run_iso "${T}/bin-version" "${JACK}" --version extra 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'too many arguments'; then
@@ -887,7 +887,7 @@ check_doctor() {
     rc=0
     out="$(doctor_run 2>&1)" || rc=$?
     if [[ "${rc}" -ne "${expected}" ]]; then fail "doctor ${scenario}: rc=${rc}, ${out}"; ok=1; fi
-    contains "${out}" 'JACK CLI: running (0.1.0-rc.1; source checkout identity).' || { fail 'doctor version identity mismatch'; ok=1; }
+    contains "${out}" 'JACK CLI: running (0.1.0; source checkout identity).' || { fail 'doctor version identity mismatch'; ok=1; }
     contains "${out}" 'Doctor is read-only' || { fail 'doctor did not finish checks'; ok=1; }
     if contains "${out}" 'secret' || contains "${out}" '100.101.102.103' || contains "${out}" 'mac.example.ts.net'; then fail 'doctor disclosed config values'; ok=1; fi
     [[ ! -e "${T}/home/leak" ]] || { fail 'doctor executed config'; ok=1; }
