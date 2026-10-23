@@ -110,6 +110,7 @@ Usage:
   jack --version Show version (no configuration or network access)
   jack --help   Show help
   jack setup    Guided destination configuration (see jack setup --help)
+  jack update   Read-only, offline source update plan (see jack update --help)
   jack install  Install this checkout link with consent
   jack uninstall Remove only this checkout link with consent
 
@@ -202,6 +203,115 @@ doctor_installation() {
   else
     doctor_line PASS 'Installation: running from source; no user-level command installed. Use ./bin/jack install if desired.'
   fi
+}
+
+update_usage() {
+  echo 'Usage: jack update [--help]'
+  echo 'Read-only update plan; no update performed.'
+  echo 'Inspects local Git metadata/status only. Local tags and tracking refs may be stale.'
+  echo 'No fetch, checkout, installation, configuration change or prompt.'
+  echo 'Exit: 0 complete local plan (clean or dirty); 1 inspection unavailable/incomplete.'
+}
+
+# Fixed local queries only. Avoid index refresh writes, fsmonitor execution,
+# automatic maintenance and lazy-fetch transports, including in partial clones.
+update_git() (
+  local root="$1" name
+  shift
+  # Clear inherited repository redirects, injected config and trace destinations
+  # (Git tracing itself can write files). Prefix expansion is Bash 3.2 compatible.
+  for name in "${!GIT_@}"; do unset "${name}"; done
+  export GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=''
+  export GIT_TERMINAL_PROMPT=0
+  git --no-pager --no-optional-locks -c core.fsmonitor=false \
+    -c core.untrackedCache=false -c gc.auto=0 -c maintenance.auto=false -C "${root}" "$@"
+)
+
+cmd_update() {
+  local root top sha branch tags="" state status upstream filters rc incomplete=0
+  local doctor_fail=0 doctor_warn=0
+  if [[ $# -eq 1 && "$1" == --help ]]; then update_usage; return 0; fi
+  [[ $# -eq 0 ]] || { echo 'jack: unexpected update arguments; use jack update --help.' >&2; return 1; }
+  echo 'Read-only update plan; no update performed.'
+  root="$(source_checkout 2>/dev/null)" || {
+    echo 'Source checkout: unknown/unsafe. Inspect source location, helper ownership and permissions.'
+    echo 'Working tree: unknown.'
+    echo 'If the source moved, run ./bin/jack update from an intact trusted checkout.'
+    echo 'Inspect the existing installation link; do not overwrite it or delete its target.'
+    return 1
+  }
+  printf 'Source checkout: %q\n' "${root}"
+  doctor_installation
+  echo 'Local refs only; no remote freshness or available update is verified.'
+  if ! command -v git >/dev/null 2>&1; then
+    echo 'Git: unavailable. Git-based planning requires Git; no installation attempted.'
+    echo 'Working tree: unknown.'
+    return 1
+  fi
+  if [[ ! -e "${root}/.git" && ! -L "${root}/.git" ]]; then
+    echo 'Git metadata: absent (non-Git source). Git-based update planning unavailable.'
+    echo 'Working tree: unknown.'
+    echo 'Review the source provenance and installation link manually; preserve user data.'
+    return 1
+  fi
+  if [[ -L "${root}/.git" ]] || ! top="$(update_git "${root}" rev-parse --show-toplevel 2>/dev/null)" || [[ "${top}" != "${root}" ]]; then
+    echo 'Git metadata: invalid, unsafe or belongs to another root. Inspect it; no repair attempted.'
+    echo 'Working tree: unknown.'
+    return 1
+  fi
+  if ! sha="$(update_git "${root}" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)"; then
+    echo 'Commit: unknown; missing/malformed metadata or unavailable local object. No fetch attempted.'
+    echo 'Working tree: unknown.'
+    return 1
+  fi
+  printf 'Commit: %s\n' "${sha}"
+  if branch="$(update_git "${root}" symbolic-ref --quiet --short HEAD 2>/dev/null)"; then
+    printf 'Branch: %s\n' "${branch}"
+    if upstream="$(update_git "${root}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+      printf 'Local tracking ref: %s (freshness unverified)\n' "${upstream}"
+    else
+      echo 'Local tracking ref: none configured or local ref unavailable.'
+    fi
+  else
+    branch=''
+    echo 'HEAD: detached.'
+  fi
+  if tags="$(update_git "${root}" for-each-ref --count=20 --points-at "${sha}" --format='%(refname:strip=2)' 'refs/tags/v[0-9]*' 2>/dev/null)"; then
+    if [[ -n "${tags}" ]]; then printf 'Exact local version tags (up to 20; publication unverified):\n%s\n' "${tags}"
+    else echo 'Exact local version tag: none.'; fi
+  else
+    echo 'Exact local version tags: unknown; local metadata unavailable.'
+    incomplete=1
+  fi
+  # Git status can execute clean filters when hashing changed files. Do not run
+  # it when any filter driver is configured, even if its attributes look unused.
+  rc=0
+  filters="$(update_git "${root}" config --get-regexp '^filter\.' 2>/dev/null)" || rc=$?
+  state=unknown
+  if [[ "${rc}" -eq 1 && -z "${filters}" ]]; then
+    if status="$(update_git "${root}" status --porcelain=v1 --untracked-files=normal --ignore-submodules=all 2>/dev/null)"; then
+      state=clean
+      [[ -z "${status}" ]] || state=dirty
+    else incomplete=1; fi
+  else
+    echo 'Status inspection skipped: configured filters or unreadable config may execute programs.'
+    incomplete=1
+  fi
+  printf 'Working tree: %s (submodule contents not inspected).\n' "${state}"
+  if [[ "${state}" != clean ]]; then
+    echo 'Preserve all local changes and untracked files before any owner-operated update; do not force/reset/clean.'
+  fi
+  if [[ -z "${branch}" ]]; then
+    echo 'Pinned/tag workflow: inspect local state, review a specific published release and its source SHA.'
+    echo 'Separately obtain its tag only with owner-approved network access; verify tag and commit before explicitly switching to that reviewed tag.'
+    echo 'Never use git pull on detached HEAD. No target release has been selected.'
+  else
+    echo 'Branch workflow: inspect tracking configuration and local commits; separately verify remote changes before deciding how to integrate.'
+    echo 'Do not assume a fast-forward is possible or that this branch tracks main.'
+  fi
+  echo 'Keep the checkout in place: its installed symlink follows source changes. Review rollback to the recorded commit without discarding work.'
+  echo 'After an authorized update, run ./scripts/dev-check.sh and jack doctor. This plan changes nothing.'
+  return "${incomplete}"
 }
 
 check_ssh() {
@@ -748,6 +858,7 @@ cmd_doctor() {
 main() {
   case "${1:-}" in
     install|uninstall) cmd_lifecycle "$@"; return ;;
+    update) shift; cmd_update "$@"; return ;;
   esac
   if [[ "${1:-}" == setup ]]; then
     shift

@@ -1117,7 +1117,9 @@ else : > "$HOME/readlink-seen"; fi
 exec "${0%/*}/../readlink-real" "$@"'
   rc=0
   out="$(run_iso "${T}/bin-install" "${src}/bin/jack" uninstall <<< yes 2>&1)" || rc=$?
-  [[ "${rc}" -ne 0 ]] && contains "${out}" 'link changed' && [[ "$(readlink "${link}")" == "${T}/home/.profile" ]] || { fail 'changed-link removal not refused'; ok=1; }
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'link changed' || [[ "$(readlink "${link}")" != "${T}/home/.profile" ]]; then
+    fail 'changed-link removal not refused'; ok=1
+  fi
   rm "${T}/bin-install/readlink" "${link}" "${T}/home/readlink-seen"
   mv "${T}/readlink-real" "${T}/bin-install/readlink"
   # Fail each mutable operation without invoking real installation paths.
@@ -1143,6 +1145,166 @@ exec "${0%/*}/../readlink-real" "$@"'
   [[ ! -s "${T}/ts.log" && ! -s "${T}/ssh.log" ]] || { fail 'lifecycle network side effect'; ok=1; }
   setup_reset
   FAKE_OS=Linux
+  return "${ok}"
+}
+
+# Actual local Git fixtures; command execution is allowlisted through a wrapper.
+check_update_plan() {
+  local src="${T}/update source with spaces" bin="${T}/bin-update" before="${T}/update-before"
+  local real_git scenario out rc expected sha matched index_identity ok=0 n link="${T}/home/.local/bin/jack"
+  real_git="$(command -v git)" || { fail 'Git required for update fixture checks'; return 1; }
+  setup_reset
+  mkdir -p "${src}/bin" "${src}/scripts" "${bin}"
+  cp "${JACK}" "${src}/bin/jack"
+  cp "${ROOT}/scripts/"setup-*.sh "${ROOT}/scripts/install-common.sh" "${src}/scripts/"
+  for n in dirname find readlink cat; do link_tool "${bin}" "${n}" || return 1; done
+  for n in ssh sudo pacman brew tailscale curl wget git-remote-http git-remote-https; do
+    write_stub "${bin}/${n}" "${TRIPWIRE}"
+  done
+  mkdir "${bin}/real"
+  ln -s "${real_git}" "${bin}/real/git"
+  write_stub "${bin}/git" '
+validate() {
+  [ "${GIT_OPTIONAL_LOCKS:-}" = 0 ] && [ "${GIT_NO_LAZY_FETCH:-}" = 1 ] &&
+  [ "${GIT_ALLOW_PROTOCOL+x}" = x ] && [ -z "$GIT_ALLOW_PROTOCOL" ] &&
+  [ -z "${GIT_TRACE:-}" ] && [ -z "${GIT_DIR:-}" ] || return 1
+  while [ "$#" -gt 0 ]; do
+    case "$1" in --no-pager|--no-optional-locks) shift ;; -c|-C) shift 2 ;; *) break ;; esac
+  done
+  case "${1:-}" in
+    config) [ "${2:-}" = --get-regexp ] && [ "$#" = 3 ]; return ;;
+    symbolic-ref) [ "$#" = 4 ] && [ "$2" = --quiet ] && [ "$3" = --short ] && [ "$4" = HEAD ]; return ;;
+    rev-parse|for-each-ref|status) return 0 ;;
+  esac
+  return 1
+}
+validate "$@" || { printf "prohibited git call\n" >> "$STUB_LOG"; exit 99; }
+# Keep host-wide Git/LFS settings out of deterministic fixtures. Local fixture
+# filter/fsmonitor settings still apply and exercise the production safeguards.
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+exec "${0%/*}/real/git" "$@"'
+  # Setup commands use real Git with isolated HOME/global config and no hooks.
+  update_fixture_git() {
+    env -i HOME="${T}/home" PATH="${PATH}" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      "${real_git}" -c user.name='JACK fixture' -c user.email=fixture@example.invalid \
+      -c core.hooksPath=/dev/null -C "${src}" "$@"
+  }
+  update_fixture_git init -q || return 1
+  update_fixture_git symbolic-ref HEAD refs/heads/fixture || return 1
+  update_fixture_git add . || return 1
+  update_fixture_git commit -qm fixture || return 1
+  sha="$(update_fixture_git rev-parse HEAD)" || return 1
+  update_fixture_git tag -a v0.0.1 -m fixture || return 1
+  update_fixture_git update-ref refs/remotes/fixture/main "${sha}" || return 1
+  update_fixture_git config remote.fixture.url https://example.invalid/no-network || return 1
+  update_fixture_git config remote.fixture.fetch '+refs/heads/*:refs/remotes/fixture/*' || return 1
+  update_fixture_git config branch.fixture.remote fixture || return 1
+  update_fixture_git config branch.fixture.merge refs/heads/main || return 1
+  mkdir -p "${T}/home/.local/bin" "${T}/home/.ssh"
+  set_config "${VALID_CONFIG}"
+  printf 'synthetic key\n' > "${T}/home/.ssh/key"
+  chmod 600 "${T}/home/.ssh/key" "${T}/home/.config/jack/config"
+  ln -s "${src}/bin/jack" "${link}"
+  for scenario in clean dirty detached-tag detached-untagged missing-git malformed-metadata non-git installed broken-link unsafe-source help extra filter fsmonitor trace; do
+    expected=0
+    case "${scenario}" in
+      dirty) printf 'untracked fixture\n' > "${src}/local-work"; printf '\n# tracked fixture change\n' >> "${src}/scripts/install-common.sh" ;;
+      detached-tag) update_fixture_git checkout -q --detach "${sha}" || return 1 ;;
+      detached-untagged)
+        update_fixture_git -c commit.gpgsign=false commit -q --allow-empty -m untagged || return 1 ;;
+      missing-git) mv "${bin}/git" "${T}/update-git-saved"; expected=1 ;;
+      malformed-metadata) mv "${src}/.git" "${T}/update-git-metadata"; printf 'not git metadata\n' > "${src}/.git"; expected=1 ;;
+      non-git) mv "${src}/.git" "${T}/update-git-metadata"; expected=1 ;;
+      broken-link) rm "${link}"; ln -s "${T}/missing-checkout/bin/jack" "${link}" ;;
+      unsafe-source) chmod o+w "${src}/scripts/install-common.sh"; expected=1 ;;
+      extra) expected=1 ;;
+      filter) update_fixture_git config filter.evil.clean "${bin}/ssh"; expected=1 ;;
+      fsmonitor) update_fixture_git config core.fsmonitor "${bin}/ssh" ;;
+    esac
+    # Compare complete fixture trees, including Git metadata, before/after every
+    # invocation. Logs/snapshots are outside both roots. cp preserves file modes.
+    mkdir "${before}"
+    cp -pR "${src}" "${before}/source"
+    cp -pR "${T}/home" "${before}/home"
+    index_identity="$(ls -ldin "${src}/.git/index" 2>/dev/null)" || index_identity=absent
+    rc=0
+    if [[ "${scenario}" == installed ]]; then
+      out="$(run_iso "${bin}" "${link}" update < /dev/null 2>&1)" || rc=$?
+    elif [[ "${scenario}" == trace ]]; then
+      out="$(env -i HOME="${T}/home" PATH="${bin}" STUB_LOG="${T}/calls.log" \
+        GIT_TRACE="${T}/home/trace-leak" GIT_TRACE2_EVENT="${T}/home/trace2-leak" GIT_DIR="${T}/wrong-repository" \
+        "${BASH}" "${src}/bin/jack" update < /dev/null 2>&1)" || rc=$?
+    elif [[ "${scenario}" == help ]]; then
+      out="$(run_iso "${bin}" "${src}/bin/jack" update --help < /dev/null 2>&1)" || rc=$?
+    elif [[ "${scenario}" == extra ]]; then
+      out="$(run_iso "${bin}" "${src}/bin/jack" update extra < /dev/null 2>&1)" || rc=$?
+    else
+      out="$(run_iso "${bin}" "${src}/bin/jack" update < /dev/null 2>&1)" || rc=$?
+    fi
+    [[ "${rc}" -eq "${expected}" ]] || { fail "update ${scenario}: rc=${rc}, ${out}"; ok=1; }
+    matched=1
+    case "${scenario}" in
+      clean) contains "${out}" 'Working tree: clean' && contains "${out}" 'Local tracking ref: fixture/main' && contains "${out}" 'Branch workflow:' || matched=0 ;;
+      dirty) contains "${out}" 'Working tree: dirty' && contains "${out}" 'Preserve all local changes' || matched=0 ;;
+      detached-tag) contains "${out}" 'HEAD: detached.' && contains "${out}" 'v0.0.1' || matched=0 ;;
+      detached-untagged) contains "${out}" 'Exact local version tag: none.' || matched=0 ;;
+      missing-git) contains "${out}" 'Git: unavailable' || matched=0 ;;
+      malformed-metadata) contains "${out}" 'Git metadata: invalid' || matched=0 ;;
+      non-git) contains "${out}" 'non-Git source' || matched=0 ;;
+      broken-link) contains "${out}" 'command link is broken' || matched=0 ;;
+      unsafe-source) contains "${out}" 'Source checkout: unknown/unsafe' || matched=0 ;;
+      filter) contains "${out}" 'Working tree: unknown' || matched=0 ;;
+    esac
+    [[ "${matched}" -eq 1 ]] || { fail "update ${scenario} diagnostics: ${out}"; ok=1; }
+    if [[ "${scenario}" != extra ]]; then
+      contains "${out}" 'Read-only update plan; no update performed.' || { fail 'missing read-only notice'; ok=1; }
+    fi
+    diff -r "${before}/source" "${src}" > /dev/null || { fail "update ${scenario} changed source/metadata"; ok=1; }
+    [[ "$(readlink "${link}")" == "$(readlink "${before}/home/.local/bin/jack")" ]] || { fail 'update changed installation link'; ok=1; }
+    # Temporarily set aside only these test-owned links so portable diff need
+    # not follow a dangling target. Restore them after comparing all HOME data.
+    mv "${link}" "${T}/update-link-after"
+    mv "${before}/home/.local/bin/jack" "${T}/update-link-before"
+    diff -r "${before}/home" "${T}/home" > /dev/null || { fail "update ${scenario} changed HOME"; ok=1; }
+    mv "${T}/update-link-after" "${link}"
+    rm "${T}/update-link-before"
+    if [[ "${index_identity}" != absent ]]; then
+      [[ "$(ls -ldin "${src}/.git/index")" == "${index_identity}" && ! "${src}/.git/index" -nt "${before}/source/.git/index" ]] || { fail 'update refreshed/replaced Git index'; ok=1; }
+    fi
+    [[ -n "$(find "${T}/home/.ssh/key" -perm 0600 -print)" && -n "$(find "${T}/home/.config/jack/config" -perm 0600 -print)" ]] || { fail 'update changed private permissions'; ok=1; }
+    [[ ! -s "${T}/calls.log" ]] || { fail 'update tripwire invoked'; ok=1; }
+    rm -rf "${before}"
+    case "${scenario}" in
+      dirty) rm "${src}/local-work"; cp -p "${ROOT}/scripts/install-common.sh" "${src}/scripts/install-common.sh" ;;
+      detached-untagged) update_fixture_git checkout -q fixture || return 1 ;;
+      missing-git) mv "${T}/update-git-saved" "${bin}/git" ;;
+      malformed-metadata) rm "${src}/.git"; mv "${T}/update-git-metadata" "${src}/.git" ;;
+      non-git) mv "${T}/update-git-metadata" "${src}/.git" ;;
+      broken-link) rm "${link}"; ln -s "${src}/bin/jack" "${link}" ;;
+      unsafe-source) chmod o-w "${src}/scripts/install-common.sh" ;;
+      filter) update_fixture_git config --remove-section filter.evil || return 1 ;;
+      fsmonitor) update_fixture_git config --unset core.fsmonitor || return 1 ;;
+    esac
+  done
+  # Linked worktree metadata is a gitfile pointing to a shared local Git dir.
+  update_fixture_git worktree add -q --detach "${T}/update-linked" "${sha}" || return 1
+  mkdir "${before}"
+  cp -pR "${src}/.git" "${before}/common"
+  cp -pR "${T}/update-linked" "${before}/linked"
+  cp -pR "${T}/home" "${before}/home"
+  rc=0
+  out="$(run_iso "${bin}" "${T}/update-linked/bin/jack" update < /dev/null 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'Working tree: clean' || ! contains "${out}" 'HEAD: detached.'; then
+    fail "linked worktree update: ${out}"; ok=1
+  fi
+  diff -r "${before}/common" "${src}/.git" > /dev/null || { fail 'update changed shared Git metadata'; ok=1; }
+  diff -r "${before}/linked" "${T}/update-linked" > /dev/null || { fail 'update changed linked worktree'; ok=1; }
+  diff -r "${before}/home" "${T}/home" > /dev/null || { fail 'linked update changed HOME'; ok=1; }
+  [[ ! -s "${T}/calls.log" ]] || { fail 'linked update tripwire invoked'; ok=1; }
+  update_fixture_git worktree remove "${T}/update-linked" || return 1
+  rm -rf "${before}"
+  setup_reset
+  rm -rf "${T}/home/.local" "${T}/home/.ssh"
   return "${ok}"
 }
 
@@ -1210,11 +1372,14 @@ run_check DOCTOR check_doctor
 run_check INSTALLER_SAFETY check_installer_safety
 run_check INSTALLER_REFUSAL check_installer_refusal
 run_check LIFECYCLE_CLI check_lifecycle_cli
+run_check UPDATE_PLAN check_update_plan
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
-  sc_count="$(shellcheck -x $(source_files) 2>/dev/null | grep -c '^In ' || true)"
+  sc_output="$(shellcheck -x $(source_files) 2>/dev/null || true)"
+  sc_count="$(printf '%s\n' "${sc_output}" | grep -c '^In ' || true)"
   echo "SHELLCHECK=INFO (${sc_count} finding(s), non-blocking)"
+  [[ -z "${sc_output}" ]] || printf '%s\n' "${sc_output}"
 else
   echo "SHELLCHECK=SKIP (shellcheck not installed)"
 fi
