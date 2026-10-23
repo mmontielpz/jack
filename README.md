@@ -4,6 +4,8 @@
 
 JACK is a minimal CLI for reaching your own devices over Tailscale and SSH.
 
+Stable release: [v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0).
+
 - Connect to a primary remote destination with `jack`, or a Mac with `jack mac`.
 - Configure destinations with guided setup, optional device discovery, or a plain configuration file.
 - Diagnose prerequisites with `jack doctor` and check reachability with `jack --status`.
@@ -20,7 +22,7 @@ connect Tailscale yourself. Git is needed for the source checkout. Python 3 is
 optional for device discovery; manual setup works without it.
 
 ```bash
-git clone https://github.com/mmontielpz/jack
+git clone --branch v0.1.0 --single-branch https://github.com/mmontielpz/jack
 cd jack
 ./bin/jack doctor
 ./scripts/setup-macos.sh        # macOS: consented user-level CLI link
@@ -34,7 +36,9 @@ jack       # primary remote destination (workstation)
 jack mac   # configured Mac
 ```
 
-Keep the checkout: the installed command links to its `bin/jack`. Installers ask
+This clones the published tag in detached HEAD state. Later development on `main`
+is separate from the release. Keep the checkout: the installed command links to
+its `bin/jack`. Installers ask
 before creating the link; they do not install packages, enable services, edit
 profiles, or configure SSH. Doctor reports missing prerequisites and configuration
 with next steps; an initial failure before setup is expected.
@@ -52,8 +56,8 @@ when a destination is unused or unreachable, even if the other is usable.
   discovery limits, manual configuration, migration, diagnosis, upgrade and uninstall.
 - [Security policy](SECURITY.md): trust boundaries and private vulnerability reporting.
 - [Contributing](CONTRIBUTING.md): offline checks, bugs, proposals and pull requests.
-- [Release policy](docs/releases.md): candidate identity and acceptance checklist;
-  no published release or package distribution is provided.
+- [Release policy](docs/releases.md): exact released source, versioning and acceptance.
+- [v0.1.0 release notes](docs/release-notes-0.1.0.md): evidence and accepted limitations.
 - [Brand guidelines](docs/branding.md): vector assets, palette, provenance and usage.
 
 ## License

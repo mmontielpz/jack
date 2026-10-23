@@ -1,10 +1,15 @@
-# Planned release and version policy
+# Release and version policy
 
-The prepared source identity is **0.1.0**, intended for a future `v0.1.0` tag.
-This is unpublished release preparation, not a release announcement, completed
-acceptance claim or authorization to publish. See the
-[stable release notes and acceptance evidence](release-notes-0.1.0.md).
+[JACK v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0) is the first published stable release.
+Its annotated tag `v0.1.0` points to the exact source commit
+`e2d16a21c810e9addcc65c2b5412795aa1d44422`.
+See the [release notes and acceptance evidence](release-notes-0.1.0.md).
 The [historical RC draft](release-notes-0.1.0-rc.1.md) remains unchanged.
+
+The released tag identifies fixed source; later commits on `main` are development
+and do not alter v0.1.0. A development checkout may still report 0.1.0 until a
+reviewed version change, so record its full SHA as well as the version. Installing
+the release should use its tag as shown in the [user guide](guide.md).
 
 ## Authoritative identity
 
@@ -74,7 +79,7 @@ platforms, verified changes, migration, dependencies, security reporting, known
 limitations and actual acceptance evidence. Populate post-merge SHA/CI facts only
 once verified; no release date or successful runtime acceptance may be invented.
 
-### Current acceptance record
+### Acceptance record and publication
 
 The [stable evidence and owner-decision matrix](release-notes-0.1.0.md#stable-acceptance-evidence--slice-14j)
 records the tested SHA and distinguishes direct agent/GitHub verification from
@@ -82,9 +87,9 @@ owner reports. PASS, PARTIAL, NOT_TESTED and WAIVED have separate meanings;
 no owner waiver is inferred. In particular, CachyOS isolated lifecycle/upgrade
 success does not establish native Mac fixture preservation, cleanup or upgrade,
 and executing stable code inside a session does not verify stable-initiated SSH.
-See [open decisions](release-notes-0.1.0.md#open-release-checklist-and-owner-decisions)
-before merging or publishing. Additional lifecycle automation is a post-v0.1.0
-follow-up; the existing acceptance and authorization gates remain unchanged.
+See the [release checklist and owner decisions](release-notes-0.1.0.md#open-release-checklist-and-owner-decisions)
+for the accepted v0.1.0 scope. Additional lifecycle automation is a post-v0.1.0
+follow-up; future releases still require the acceptance and authorization gates above.
 
 The [Slice 14K1 owner acceptance record](release-notes-0.1.0.md#owner-acceptance-decisions--slice-14k1)
 accepts macOS and SSH/setup with documented limitations and accepts the current
@@ -94,5 +99,6 @@ The owner subsequently confirmed that the exact macOS test sandbox path was
 ALREADY_ABSENT; the original installed RC version and symlink remained unchanged.
 This confirms no remaining cleanup at that path, but does not prove when it was
 removed or validate synthetic fixture preservation. The owner has separately
-authorized PR #15 merge after this documentation update; release publication
-remains unauthorized.
+authorized PR #15 merge, followed by separate Slice 14N authorization for
+creating v0.1.0 and publishing the stable GitHub Release. Publication is complete;
+that authorization does not apply to any future release.

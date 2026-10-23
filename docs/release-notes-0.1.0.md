@@ -1,9 +1,15 @@
-# JACK v0.1.0 — unpublished release preparation
+# JACK v0.1.0 — Just Connect.
 
-The prepared CLI identity is `0.1.0`, intended for a future `v0.1.0` tag.
-No tag, GitHub release, publication date or package is created by this preparation.
-The PR is for review only; merging and publishing require separate authorization.
-Open acceptance items below remain requirements, not implicit waivers.
+Published stable release: [JACK v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0).
+Published on 2026-10-23 (UTC) from the exact source commit
+`e2d16a21c810e9addcc65c2b5412795aa1d44422`, identified by annotated tag `v0.1.0`.
+[PR #15](https://github.com/mmontielpz/jack/pull/15) merged to this source commit.
+The tag and published source are unchanged by this documentation update; later
+commits on `main` are development, not a replacement for v0.1.0.
+
+The evidence below preserves historical pre-release checkpoints and owner
+acceptance with documented limitations. Publication adds no new validation,
+platform support or features, and does not turn unverified tests into PASS.
 
 ## Product and changes
 
@@ -35,13 +41,13 @@ accounts and addresses; follow the [migration guide](guide.md#migrating-from-ear
 Installers do not create config or modify keys, packages, services or profiles.
 An installed link follows its checkout, so updating source changes the command.
 
-## Acceptance evidence and provenance
+## Historical RC acceptance evidence and provenance
 
 The reviewed RC baseline is **8f2e9ad9e4e0f181bab55c1dd4079c81e2051a45**,
 version `0.1.0-rc.1`. Historical results below apply to that RC; a stable version
-string alone does not transfer acceptance to a new build. Record the final
-reviewed/merged SHA and owner acceptance decision before any release. This file
-does not invent a future stable SHA or infer macOS HEAD from version output.
+string alone does not transfer acceptance to a new build. The following is the
+pre-publication evidence record; the final published source is recorded above.
+No macOS HEAD is inferred from version output.
 
 | Check | Evidence and provenance | Scope / limitation |
 | --- | --- | --- |
@@ -65,7 +71,8 @@ pre-merge facts or turning owner reports into agent-verified results.
 The stable acceptance subject is **1c20cf59f11873e397e5e47cd6a30d5c3fe29a4f**,
 version `0.1.0`. Results below supplement the preserved historical RC evidence;
 they do not retroactively change it. This documentation update changes no runtime
-behavior. The final merged release SHA must still be recorded after authorization.
+behavior. These are Slice 14J observations; subsequent owner decisions and the
+publication record do not rewrite those test results.
 
 Status meanings: **PASS** is scoped successful evidence with provenance;
 **PARTIAL** means some required coverage remains; **NOT_TESTED** includes
@@ -106,17 +113,17 @@ live connections were performed for this update; existing offline checks were re
 
 ## Open release checklist and owner decisions
 
-| Item | Status | Required disposition before publication |
+| Item | Status | Published scope / owner disposition |
 | --- | --- | --- |
-| Stable identity and automated checks | PASS for recorded stable SHA | Documentation-only updates must pass current required PR CI; freeze final reviewed SHA |
+| Stable identity and automated checks | PASS for recorded stable SHA | Published source is fixed above; later documentation updates require their own PR checks |
 | CachyOS isolated lifecycle and preservation | PASS | Evidence scope is disposable HOME; no destructive real-installation cycle claimed |
 | macOS lifecycle/preservation/cleanup | PARTIAL | Owner accepts macOS with documented limitations (Slice 14K1). Fixture preservation remains NOT VERIFIED; the exact sandbox path was subsequently confirmed ALREADY_ABSENT; synthetic fixture preservation remains NOT VERIFIED |
 | Source upgrade | PARTIAL | Native CachyOS isolated path PASS; macOS NOT_TESTED remains a documented limitation under the owner macOS acceptance; no native Mac result is inferred |
 | Full per-platform setup checklist | PARTIAL | Owner accepts SSH/setup with documented limitations. Offline fixtures PASS; incomplete actual-machine case attribution remains unchanged, not converted to test PASS |
 | Stable-initiated SSH | NOT_TESTED | Owner accepts SSH/setup with documented limitations; stable initiation remains NOT VERIFIED. No new connection is authorized or claimed executed |
-| Precise platform/build record | PARTIAL | Exact Mac stable SHA is owner-reported; missing macOS/Bash/dependency details remain unverified under documented macOS limitations. Final merged SHA still requires separate authorization and verification |
+| Precise platform/build record | PARTIAL | Exact Mac stable SHA is owner-reported; missing macOS/Bash/dependency details remain unverified under documented macOS limitations. The published source SHA is recorded above |
 | Additional branding visual-test execution | NOT_TESTED | Owner explicitly accepts the current identity for v0.1.0 (Slice 14K1); this is an acceptance decision, not a newly executed visual test. Further visual work is deferred |
-| Final SHA / merge / release authorization | NOT_TESTED | PR remains review-only; owner must separately authorize merge/publication and verify synchronized final main |
+| Published SHA / merge / release | PASS | PR #15 merged; Slice 14N separately authorized and verified annotated v0.1.0 and the public stable release at the source SHA above. This is publication verification, not new platform testing |
 
 No pending item is marked WAIVED. The optional native Mac ShellCheck SKIP is not
 a failed product test. AUTH_REQUIRED blocks the agent's unattended transport,
@@ -127,7 +134,9 @@ addresses, filesystem locations or raw tailnet diagnostics are included here.
 ## Owner acceptance decisions — Slice 14K1
 
 The Product Owner explicitly supplied the following v0.1.0 decisions after
-reviewing the documented evidence and limitations. These are owner acceptance
+reviewing the documented evidence and limitations. This is the historical
+pre-publication decision record; later Slice 14N publication is recorded above.
+These are owner acceptance
 decisions, not new test execution or independent agent verification. They do not
 change the historical RC results or the stable evidence table above.
 
@@ -138,14 +147,16 @@ change the historical RC results or the stable evidence table above.
 | BRANDING | ACCEPT_CURRENT_IDENTITY_FOR_V0.1.0 | Current JACK identity accepted for v0.1.0; further visual branding work deferred; no additional rendering or visual tests claimed |
 | MACOS_SANDBOX_CLEANUP | ALREADY_ABSENT (owner-reported subsequent check) | The exact disposable sandbox path was checked and found absent. No deletion occurred in that check; the removal time is unknown. Original installed RC version and symlink were confirmed unchanged |
 | MERGE_AUTHORIZATION | YES (subsequent owner authorization) | Owner authorized a final cleanup documentation update and merge of PR #15 to main. This does not authorize tagging or publication |
-| RELEASE_AUTHORIZATION | NO | No tag, release or publication is authorized |
+| RELEASE_AUTHORIZATION (at Slice 14K1) | NO | At this historical checkpoint publication was not authorized; the owner subsequently authorized Slice 14N publication of v0.1.0, now completed |
 
 Evidence labeled PARTIAL or NOT_TESTED retains that status. No individual test
 is marked WAIVED or promoted to PASS by these decisions. Acceptance with documented
 limitations does not establish missing fixture preservation or sandbox cleanup.
 The subsequent owner check found the exact sandbox path already absent; it did
 not execute cleanup or establish synthetic fixture preservation. The owner
-separately authorized merge after this documentation update, but not publication. A final merged release SHA has not been assigned here.
+separately authorized merge at that checkpoint. The later Slice 14N authorization
+and completed publication are recorded above; unverified platform evidence remains
+unchanged. Future releases require separate authorization.
 
 ### Post-v0.1.0 follow-up
 
