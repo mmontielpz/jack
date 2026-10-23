@@ -90,5 +90,9 @@ The [Slice 14K1 owner acceptance record](release-notes-0.1.0.md#owner-acceptance
 accepts macOS and SSH/setup with documented limitations and accepts the current
 branding for v0.1.0; further visual work is deferred. This records owner decisions,
 not newly executed tests. PARTIAL and NOT_TESTED evidence remains unchanged.
-Mac sandbox cleanup is PENDING operational follow-up; fixture preservation is not
-verified. Merge and release authorization are both NO.
+The owner subsequently confirmed that the exact macOS test sandbox path was
+ALREADY_ABSENT; the original installed RC version and symlink remained unchanged.
+This confirms no remaining cleanup at that path, but does not prove when it was
+removed or validate synthetic fixture preservation. The owner has separately
+authorized PR #15 merge after this documentation update; release publication
+remains unauthorized.
