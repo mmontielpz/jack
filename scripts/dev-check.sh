@@ -1177,6 +1177,9 @@ validate() {
   return 1
 }
 validate "$@" || { printf "prohibited git call\n" >> "$STUB_LOG"; exit 99; }
+# Keep host-wide Git/LFS settings out of deterministic fixtures. Local fixture
+# filter/fsmonitor settings still apply and exercise the production safeguards.
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 exec "${0%/*}/real/git" "$@"'
   # Setup commands use real Git with isolated HOME/global config and no hooks.
   update_fixture_git() {
@@ -1371,8 +1374,10 @@ run_check UPDATE_PLAN check_update_plan
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
-  sc_count="$(shellcheck -x $(source_files) 2>/dev/null | grep -c '^In ' || true)"
+  sc_output="$(shellcheck -x $(source_files) 2>/dev/null || true)"
+  sc_count="$(printf '%s\n' "${sc_output}" | grep -c '^In ' || true)"
   echo "SHELLCHECK=INFO (${sc_count} finding(s), non-blocking)"
+  [[ -z "${sc_output}" ]] || printf '%s\n' "${sc_output}"
 else
   echo "SHELLCHECK=SKIP (shellcheck not installed)"
 fi
