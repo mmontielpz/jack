@@ -73,3 +73,15 @@ Draft notes should identify the candidate/version and frozen SHA, supported
 platforms, verified changes, migration, dependencies, security reporting, known
 limitations and actual acceptance evidence. Populate post-merge SHA/CI facts only
 once verified; no release date or successful runtime acceptance may be invented.
+
+### Current acceptance record
+
+The [stable evidence and owner-decision matrix](release-notes-0.1.0.md#stable-acceptance-evidence--slice-14j)
+records the tested SHA and distinguishes direct agent/GitHub verification from
+owner reports. PASS, PARTIAL, NOT_TESTED and WAIVED have separate meanings;
+no owner waiver is inferred. In particular, CachyOS isolated lifecycle/upgrade
+success does not establish native Mac fixture preservation, cleanup or upgrade,
+and executing stable code inside a session does not verify stable-initiated SSH.
+See [open decisions](release-notes-0.1.0.md#open-release-checklist-and-owner-decisions)
+before merging or publishing. Additional lifecycle automation is a post-v0.1.0
+follow-up; the existing acceptance and authorization gates remain unchanged.

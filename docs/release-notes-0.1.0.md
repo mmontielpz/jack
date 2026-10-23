@@ -60,23 +60,75 @@ No additional SSH, installation or system changes were performed to prepare
 these notes. Preserve historical RC/slice evidence rather than rewriting its
 pre-merge facts or turning owner reports into agent-verified results.
 
-## Open release checklist
+## Stable acceptance evidence — Slice 14J
 
-| Item | Status / required disposition before publication |
-| --- | --- |
-| Stable source version and expected assertions | Prepared as 0.1.0; final commit must pass local checks and required PR CI |
-| Final release SHA / merge authorization | Not assigned by these notes; review PR, separately approve merge, then record exact final SHA |
-| Real macOS install/repeat/uninstall preservation | NOT_RUN in agent records; full current-candidate owner evidence not supplied; complete or obtain explicit owner-approved policy disposition |
-| Real CachyOS uninstall/reinstall preservation | NOT_RUN; only install/repeat independently supported; complete or obtain explicit owner-approved policy disposition |
-| Manual upgrade behavior on supported platforms | NOT_RUN; no checkout update was performed for acceptance |
-| Full per-platform setup checklist | Offline fixtures PASS; actual discovery/manual, noninteractive, cancellation and preservation cases are not individually documented for both machines; owner must supply results or explicit disposition |
-| Precise platform/build record | Owner must record actual macOS SHA, OS/Bash/dependency versions and final stable-build acceptance scope; RC version equality is insufficient |
-| Final brand visual acceptance | Not established by supplied evidence; owner review remains separate |
-| Release authorization | NOT_GRANTED by this preparation; no tags or publishing allowed |
+The stable acceptance subject is **1c20cf59f11873e397e5e47cd6a30d5c3fe29a4f**,
+version `0.1.0`. Results below supplement the preserved historical RC evidence;
+they do not retroactively change it. This documentation update changes no runtime
+behavior. The final merged release SHA must still be recorded after authorization.
 
-Unverified checklist items are not silently waived. Stable publication remains
-conditional on resolving them through evidence or an explicit owner decision
-consistent with the [release policy](releases.md).
+Status meanings: **PASS** is scoped successful evidence with provenance;
+**PARTIAL** means some required coverage remains; **NOT_TESTED** includes
+unverified/unconfirmed cases, not assumed success; **WAIVED** requires a specific
+explicit owner decision. **No waivers have been granted by this record.**
+
+| Acceptance item | Status | Provenance and exact scope |
+| --- | --- | --- |
+| CachyOS native CLI and offline checks | PASS | Agent-observed and owner-reported: CLI 0.1.0, 18/18 groups; native CachyOS, Bash 5.3.20 |
+| CachyOS ShellCheck | PASS | Agent-observed ShellCheck 0.11.0, zero findings |
+| Stable candidate CI | PASS | GitHub-verified [PR #15](https://github.com/mmontielpz/jack/pull/15) [checks run](https://github.com/mmontielpz/jack/actions/runs/39742366276) at the stable acceptance SHA; a new documentation commit requires its own PR checks |
+| CachyOS doctor/status | PASS | Owner-reported stable runtime results; no fresh live probes performed for this documentation |
+| CachyOS isolated install/repeat/uninstall/reinstall | PASS | Agent-observed native Slice 14G2; all four operations exit 0; isolated installed CLI reports 0.1.0 |
+| CachyOS refusal and fixture preservation | PASS | Slice 14G2: declined/EOF consent and occupied file, unrelated/dangling symlink and directory refused with expected exit 1; synthetic config, keys, profile and unrelated files preserved; disposable environment removed |
+| macOS stable SHA, CLI and offline checks | PASS | Owner-reported exact stable acceptance SHA, version 0.1.0, clean candidate tree and 18/18 native checks; not independently verified by agent |
+| macOS ShellCheck | NOT_TESTED | Owner-reported SKIP because not installed; optional tool, not a silent waiver of another gate |
+| macOS doctor/status | PASS | Owner-reported native stable results; not independently verified |
+| macOS isolated basic lifecycle | PASS | Owner-reported native install/repeat/uninstall/reinstall; scope is basic lifecycle only |
+| macOS original installation preservation | PASS | Owner-reported original installed RC and its symlink remained unchanged; does not establish synthetic fixture preservation |
+| macOS synthetic fixture preservation | NOT_TESTED | NOT VERIFIED; config/key/profile/unrelated-fixture preservation not established by supplied evidence |
+| macOS refusal edge cases | NOT_TESTED | Native edge cases not reported tested; existing offline cases do not become independently observed native results |
+| macOS temporary sandbox cleanup | NOT_TESTED | NOT CONFIRMED; must identify the test-owned sandbox and confirm safe cleanup separately |
+| CachyOS isolated RC-to-stable source upgrade | PASS | Agent-observed Slice 14I: installed RC 0.1.0-rc.1 at 8f2e9ad9e4e0f181bab55c1dd4079c81e2051a45; clean disposable checkout upgraded by `git pull --ff-only`, exit 0, to stable acceptance SHA/version 0.1.0 |
+| Upgrade preservation/linkage | PASS | Slice 14I retained config/key/profile/unrelated bytes and modes, installation symlink target and inode; post-upgrade help/version exit 0, 18/18 checks PASS, zero lint findings; disposable resources removed; monitored real paths unchanged |
+| Isolated post-upgrade doctor | PARTIAL | Slice 14I intentionally omitted Tailscale from diagnostic PATH; exit 1 is the expected missing-prerequisite diagnostic. Platform/config checks PASS; this is not full connectivity acceptance or a JACK defect |
+| macOS source upgrade | NOT_TESTED | No native Mac RC-to-stable source-upgrade evidence supplied |
+| Bidirectional RC interactive SSH | PASS | Owner-reported successful sessions and closure in both directions; identities omitted; no independent agent verification |
+| Subsequent interactive access/stable code execution | PASS | Owner-reported interactive access to the Mac and stable candidate execution inside that session; this does not prove stable JACK initiated SSH |
+| Stable candidate initiating SSH | NOT_TESTED | NOT VERIFIED; do not infer from RC sessions or running candidate code inside an existing session |
+| Agent noninteractive SSH transport | PARTIAL | Slice 14G3: one BatchMode attempt, exit 255, AUTH_REQUIRED. Remote test script never executed; no product defect established or authentication changes made |
+
+Slice 14I used a local filesystem upstream, not GitHub, and a disposable branch
+tracking the stable candidate rather than public main. The documented pull command
+performed a fast-forward to the existing commit; no merge commit was created.
+This proves the isolated native CachyOS source-upgrade path, not native Mac upgrade
+or network/authentication behavior. No additional real-system acceptance tests or
+live connections were performed for this update; existing offline checks were rerun.
+
+## Open release checklist and owner decisions
+
+| Item | Status | Required disposition before publication |
+| --- | --- | --- |
+| Stable identity and automated checks | PASS for recorded stable SHA | Documentation-only updates must pass current required PR CI; freeze final reviewed SHA |
+| CachyOS isolated lifecycle and preservation | PASS | Evidence scope is disposable HOME; no destructive real-installation cycle claimed |
+| macOS lifecycle/preservation/cleanup | PARTIAL | Basic lifecycle/original RC preservation owner-reported PASS; confirm fixture preservation and sandbox cleanup or explicitly disposition unresolved coverage |
+| Source upgrade | PARTIAL | Native CachyOS isolated path PASS; macOS NOT_TESTED. Owner must supply native Mac evidence or explicitly decide whether Linux coverage suffices |
+| Full per-platform setup checklist | PARTIAL | Offline fixtures PASS; actual discovery/manual, noninteractive, cancellation and preservation cases are not individually documented for both machines. Owner supplies evidence or explicit coverage decision |
+| Stable-initiated SSH | NOT_TESTED | Owner must authorize any additional connection-specific test or explicitly accept RC evidence given the version-only CLI change; existing sessions do not imply this approval |
+| Precise platform/build record | PARTIAL | Exact Mac stable SHA now owner-reported; actual macOS/Bash/dependency version details and final release acceptance record remain to be supplied |
+| Final brand visual acceptance | NOT_TESTED | Explicit owner approval or documented deferral decision remains outstanding |
+| Final SHA / merge / release authorization | NOT_TESTED | PR remains review-only; owner must separately authorize merge/publication and verify synchronized final main |
+
+No pending item is marked WAIVED. The optional native Mac ShellCheck SKIP is not
+a failed product test. AUTH_REQUIRED blocks the agent's unattended transport,
+not normal owner-operated SSH; changing credentials is not a release requirement.
+Historical slice facts remain unchanged. No private accounts, device names,
+addresses, filesystem locations or raw tailnet diagnostics are included here.
+
+### Post-v0.1.0 follow-up
+
+Additional native lifecycle/refusal automation is a post-v0.1.0 improvement, not
+a new release prerequisite. It does not close unverified preservation/cleanup
+gates or replace explicit owner acceptance decisions under the [release policy](releases.md).
 
 ## Security and known limitations
 
