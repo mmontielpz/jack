@@ -67,8 +67,14 @@ installer_main() {
     installer_consent 'Create the JACK symlink in ~/.local/bin?' || { echo 'Cancelled; nothing changed.'; return 1; }
     (umask 077; mkdir -p "${INSTALL_DIR}") || { echo 'jack: directory creation failed; inspect any partial directories. No cleanup attempted.' >&2; return 1; }
     installer_paths_safe || return 1
-    # No force/replace flags: an existing entry always wins.
-    ln -s "${JACK_SRC}" "${INSTALL_PATH}" || { echo 'jack: link creation failed; inspect the destination. Created directories may remain; no cleanup attempted.' >&2; return 1; }
+    if [[ -e "${INSTALL_PATH}" || -L "${INSTALL_PATH}" ]]; then
+      echo 'jack: refusing installation; destination became occupied during consent. Inspect it before retrying.' >&2
+      return 1
+    fi
+    # Both wrappers name the source jack. Anchor ln to the verified parent so
+    # it constructs ./jack once, never treats an occupied jack as a container.
+    # No force/replace options: even a leaf appearing after the check must fail.
+    (cd -P -- "${INSTALL_DIR}" && ln -s "${JACK_SRC}" .) || { echo 'jack: link creation failed; inspect the destination. Created directories may remain; no cleanup attempted.' >&2; return 1; }
     echo 'JACK linked to this checkout. Keep the checkout in place.'
   fi
   echo 'Next: ~/.local/bin/jack doctor, jack setup, jack --status, then jack or jack mac.'

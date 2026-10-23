@@ -1308,6 +1308,102 @@ exec "${0%/*}/real/git" "$@"'
   return "${ok}"
 }
 
+# Inject an occupied leaf after consent, and again immediately before native ln.
+# The latter cases ensure a pre-check alone cannot hide directory-operand bugs.
+check_install_consent_race() (
+  local race="${T}/consent-race" tools home dest os route stage kind out rc ok=0 script label
+  mkdir "${race}"
+  cp -R "${T}/bin-install" "${race}/bin"
+  tools="${race}/bin"
+  link_tool "${tools}" ls || return 1
+  mv "${tools}/mkdir" "${tools}/mkdir-real"
+  mv "${tools}/ln" "${tools}/ln-real"
+  for kind in tailscale curl wget; do write_stub "${tools}/${kind}" "${TRIPWIRE}"; done
+  # Both wrappers use the same injector. Only the selected stage changes the
+  # test-owned destination; injection primitives bypass the wrappers themselves.
+  local injector='
+base="${0%/*}"
+tool="${0##*/}"
+if [ "$tool" = mkdir ]; then "$base/mkdir-real" "$@" || exit 1; fi
+if [ "$(cat "$base/../stage")" = "$tool" ] && [ ! -e "$base/../injected" ]; then
+  dest="$HOME/.local/bin/jack"
+  case "$(cat "$base/../kind")" in
+    directory) "$base/mkdir-real" "$dest"; printf "sentinel\n" > "$dest/owner-data" ;;
+    directory-link) "$base/ln-real" -s "$base/../target-directory" "$dest" ;;
+    file) printf "occupied fixture\n" > "$dest" ;;
+    unrelated-link) "$base/ln-real" -s "$base/../unrelated-file" "$dest" ;;
+    dangling-link) "$base/ln-real" -s "$base/../missing-file" "$dest" ;;
+  esac
+  TZ=UTC0 LC_ALL=C "$base/ls" -ldin "$dest" > "$base/../occupied-metadata"
+  : > "$base/../injected"
+fi
+if [ "$tool" = ln ]; then exec "$base/ln-real" "$@"; fi
+'
+  write_stub "${tools}/mkdir" "${injector}"
+  write_stub "${tools}/ln" "${injector}"
+  mkdir "${race}/target-directory"
+  printf 'sentinel\n' > "${race}/target-directory/owner-data"
+  printf 'unrelated fixture\n' > "${race}/unrelated-file"
+  cp -pR "${race}/target-directory" "${race}/expected-target"
+  for os in Darwin Linux; do
+    if [[ "${os}" == Darwin ]]; then script=setup-macos.sh; else script=setup-workstation.sh; fi
+    for route in cli legacy; do
+      for stage in mkdir ln; do
+        printf '%s\n' "${stage}" > "${race}/stage"
+        for kind in directory directory-link file unrelated-link dangling-link; do
+          label="${os}/${route}/${stage}/${kind}"
+          home="${race}/home-${os}-${route}-${stage}-${kind}"
+          mkdir -p "${home}/.local/bin" "${home}/.config/jack" "${home}/.ssh"
+          printf '%s\n' "${VALID_CONFIG}" > "${home}/.config/jack/config"
+          printf 'synthetic key\n' > "${home}/.ssh/key"
+          printf 'synthetic profile\n' > "${home}/.profile"
+          chmod 600 "${home}/.config/jack/config" "${home}/.ssh/key" "${home}/.profile"
+          cp -pR "${home}" "${race}/expected-home"
+          printf '%s\n' "${kind}" > "${race}/kind"
+          rm -f "${race}/injected"
+          dest="${home}/.local/bin/jack"
+          rc=0
+          if [[ "${route}" == cli ]]; then
+            out="$(env -i HOME="${home}" PATH="${tools}" FAKE_OS="${os}" DOCTOR_DISTRO=arch STUB_LOG="${race}/tripwire.log" "${BASH}" "${JACK}" install <<< yes 2>&1)" || rc=$?
+          else
+            out="$(env -i HOME="${home}" PATH="${tools}" FAKE_OS="${os}" DOCTOR_DISTRO=arch STUB_LOG="${race}/tripwire.log" "${BASH}" "${ROOT}/scripts/${script}" <<< yes 2>&1)" || rc=$?
+          fi
+          if [[ "${rc}" -eq 0 ]] || contains "${out}" 'JACK linked to this checkout.'; then
+            fail "consent race ${label}: false success (rc=${rc})"; ok=1
+          fi
+          [[ -f "${race}/injected" ]] || { fail "injection not reached: ${label}"; ok=1; }
+          case "${kind}" in
+            directory)
+              if [[ ! -d "${dest}" || -L "${dest}" || "$(cat "${dest}/owner-data")" != sentinel || -e "${dest}/jack" || -L "${dest}/jack" ]]; then fail "directory modified/nested link: ${label}"; ok=1; fi ;;
+            directory-link)
+              if [[ ! -L "${dest}" || "$(readlink "${dest}")" != "${tools}/../target-directory" ]]; then fail "directory link changed: ${label}"; ok=1; fi ;;
+            file)
+              if [[ ! -f "${dest}" || -L "${dest}" || "$(cat "${dest}")" != 'occupied fixture' ]]; then fail "occupied file changed: ${label}"; ok=1; fi ;;
+            unrelated-link)
+              [[ -L "${dest}" && "$(readlink "${dest}")" == "${tools}/../unrelated-file" ]] || { fail "unrelated link changed: ${label}"; ok=1; } ;;
+            dangling-link)
+              [[ -L "${dest}" && ! -e "${dest}" && "$(readlink "${dest}")" == "${tools}/../missing-file" ]] || { fail "dangling link changed: ${label}"; ok=1; } ;;
+          esac
+          [[ "$(cat "${race}/occupied-metadata")" == "$(TZ=UTC0 LC_ALL=C command ls -ldin "${dest}")" ]] || { fail "occupied entry metadata changed: ${label}"; ok=1; }
+          diff -r "${race}/expected-target" "${race}/target-directory" > /dev/null || { fail "unrelated directory modified: ${label}"; ok=1; }
+          [[ "$(cat "${race}/unrelated-file")" == 'unrelated fixture' ]] || { fail 'unrelated data changed'; ok=1; }
+          # Set aside only the injected fixture, then compare every other HOME
+          # entry. Never perform cleanup through a symlink target.
+          mv "${dest}" "${race}/occupied-fixture"
+          diff -r "${race}/expected-home" "${home}" > /dev/null || { fail "user fixtures modified: ${label}"; ok=1; }
+          [[ -n "$(find "${home}/.ssh/key" -perm 0600 -print)" && -n "$(find "${home}/.config/jack/config" -perm 0600 -print)" && -n "$(find "${home}/.profile" -perm 0600 -print)" ]] || { fail 'private modes changed'; ok=1; }
+          rm -rf "${race}/occupied-fixture" "${race}/expected-home"
+          # Remove only the known bad nested link produced before the fix so
+          # subsequent pre-fix reproductions remain independent.
+          if [[ -L "${race}/target-directory/jack" ]]; then rm "${race}/target-directory/jack"; fi
+        done
+      done
+    done
+  done
+  [[ ! -s "${race}/tripwire.log" ]] || { fail 'consent race tripwire invoked'; ok=1; }
+  return "${ok}"
+)
+
 installer_refuses() { # label pathdir os script expected-text
   local out rc=0
   FAKE_OS="$3"
@@ -1373,6 +1469,7 @@ run_check INSTALLER_SAFETY check_installer_safety
 run_check INSTALLER_REFUSAL check_installer_refusal
 run_check LIFECYCLE_CLI check_lifecycle_cli
 run_check UPDATE_PLAN check_update_plan
+run_check INSTALL_CONSENT_RACE check_install_consent_race
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
