@@ -205,13 +205,16 @@ OpenSSH client, and the Tailscale CLI with an authenticated, running daemon.
 Git is needed to obtain/update the checkout. Python 3 is optional for discovery;
 manual configuration works without it. Homebrew is not required by JACK's installer.
 
-Keep the checkout in place: installation links to its `bin/jack`, rather than
-copying a versioned release. No package registry or release installer is provided.
+The [v0.1.0 release](https://github.com/mmontielpz/jack/releases/tag/v0.1.0) is published from
+`e2d16a21c810e9addcc65c2b5412795aa1d44422`. The commands below clone that tag in
+detached HEAD state; future development on `main` is separate. Keep the checkout
+in place: installation links to its `bin/jack`. No package registry or binary
+release installer is provided.
 
 ## Install on Mac
 
 ```bash
-git clone https://github.com/mmontielpz/jack
+git clone --branch v0.1.0 --single-branch https://github.com/mmontielpz/jack
 cd jack
 ./bin/jack doctor
 ./scripts/setup-macos.sh
@@ -226,7 +229,7 @@ JACK does not enable it.
 ## Install on the workstation (Arch / CachyOS)
 
 ```bash
-git clone https://github.com/mmontielpz/jack
+git clone --branch v0.1.0 --single-branch https://github.com/mmontielpz/jack
 cd jack
 ./bin/jack doctor
 ./scripts/setup-workstation.sh
@@ -286,10 +289,16 @@ PASS never proves peer reachability, Tailscale SSH authorization, or authenticat
 
 ### Upgrade
 
-Keep local changes safe: from the original checkout, check `git status`, then
-update a clean branch with `git pull --ff-only`. The installed symlink immediately
-uses that checkout's updated code. Run `./scripts/dev-check.sh` and `jack doctor`
-afterward. Existing configuration and keys are not migrated or overwritten.
+A release-tag checkout is pinned and detached: do not use `git pull` there.
+For a later published release, first inspect `git status` and preserve local work,
+fetch its tag, verify the release's documented source commit, and explicitly switch
+to that reviewed tag. No later release is assumed here, and no forced checkout or
+tag replacement is needed. The installed link then follows that selected source.
+
+For an explicitly chosen development checkout on a clean branch tracking `main`,
+`git pull --ff-only` remains the source-upgrade workflow. This follows development,
+not the fixed v0.1.0 release. Run `./scripts/dev-check.sh` and `jack doctor` after
+an approved update. Existing configuration and keys are not migrated or overwritten.
 If the checkout moved, inspect/remove its old symlink yourself before installing
 from the new location; JACK refuses to replace links to other checkouts.
 
