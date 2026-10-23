@@ -1117,7 +1117,9 @@ else : > "$HOME/readlink-seen"; fi
 exec "${0%/*}/../readlink-real" "$@"'
   rc=0
   out="$(run_iso "${T}/bin-install" "${src}/bin/jack" uninstall <<< yes 2>&1)" || rc=$?
-  [[ "${rc}" -ne 0 ]] && contains "${out}" 'link changed' && [[ "$(readlink "${link}")" == "${T}/home/.profile" ]] || { fail 'changed-link removal not refused'; ok=1; }
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'link changed' || [[ "$(readlink "${link}")" != "${T}/home/.profile" ]]; then
+    fail 'changed-link removal not refused'; ok=1
+  fi
   rm "${T}/bin-install/readlink" "${link}" "${T}/home/readlink-seen"
   mv "${T}/readlink-real" "${T}/bin-install/readlink"
   # Fail each mutable operation without invoking real installation paths.
