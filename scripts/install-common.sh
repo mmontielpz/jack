@@ -41,12 +41,13 @@ installer_main() {
   echo 'Install/connect Tailscale and configure any receiving SSH service separately.'
   echo 'No packages, services, SSH policies, keys, or shell profiles will be changed.'
   installer_paths_safe || return 1
+  printf 'Source CLI: %s\nInstallation link: %s\n' "${JACK_SRC}" "${INSTALL_PATH}"
   if [[ "${action}" == --uninstall ]]; then
     if [[ -L "${INSTALL_PATH}" && "$(readlink "${INSTALL_PATH}")" == "${JACK_SRC}" ]]; then
       installer_consent 'Remove the JACK symlink for this checkout?' || { echo 'Cancelled; nothing changed.'; return 1; }
       installer_paths_safe || return 1
       [[ -L "${INSTALL_PATH}" && "$(readlink "${INSTALL_PATH}")" == "${JACK_SRC}" ]] || { echo 'jack: link changed; inspect before retrying.' >&2; return 1; }
-      rm -f "${INSTALL_PATH}" || return 1
+      rm -f "${INSTALL_PATH}" || { echo 'jack: link removal failed; inspect the installation path before retrying. No other cleanup attempted.' >&2; return 1; }
       echo 'Removed the JACK symlink for this checkout.'
     elif [[ -e "${INSTALL_PATH}" || -L "${INSTALL_PATH}" ]]; then
       echo 'jack: refusing to remove a user-managed file or unrelated link.' >&2; return 1
@@ -64,10 +65,10 @@ installer_main() {
     echo 'jack: refusing to overwrite ~/.local/bin/jack; inspect the existing file/link.' >&2; return 1
   else
     installer_consent 'Create the JACK symlink in ~/.local/bin?' || { echo 'Cancelled; nothing changed.'; return 1; }
-    (umask 077; mkdir -p "${INSTALL_DIR}") || return 1
+    (umask 077; mkdir -p "${INSTALL_DIR}") || { echo 'jack: directory creation failed; inspect any partial directories. No cleanup attempted.' >&2; return 1; }
     installer_paths_safe || return 1
     # No force/replace flags: an existing entry always wins.
-    ln -s "${JACK_SRC}" "${INSTALL_PATH}" || return 1
+    ln -s "${JACK_SRC}" "${INSTALL_PATH}" || { echo 'jack: link creation failed; inspect the destination. Created directories may remain; no cleanup attempted.' >&2; return 1; }
     echo 'JACK linked to this checkout. Keep the checkout in place.'
   fi
   echo 'Next: ~/.local/bin/jack doctor, jack setup, jack --status, then jack or jack mac.'

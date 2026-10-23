@@ -110,6 +110,8 @@ Usage:
   jack --version Show version (no configuration or network access)
   jack --help   Show help
   jack setup    Guided destination configuration (see jack setup --help)
+  jack install  Install this checkout link with consent
+  jack uninstall Remove only this checkout link with consent
 
 Configuration: $HOME/.config/jack/config
 Use literal KEY=VALUE lines (no quotes or shell syntax):
@@ -122,6 +124,84 @@ Set both keys for each destination you use. See config.example and README.md.
 
 Transport: Tailscale -> SSH
 EOF
+}
+
+# Resolve only this invocation, never a script found through PATH. Bound symlink
+# traversal and use portable readlink/pwd instead of GNU readlink -f.
+source_checkout() (
+  local path="${BASH_SOURCE[0]}" dir target hops=0 root item writable
+  while :; do
+    dir="$(cd -P "$(dirname "${path}")" && pwd -P)" || return 1
+    path="${dir}/${path##*/}"
+    [[ -L "${path}" ]] || break
+    hops=$((hops + 1))
+    [[ "${hops}" -le 16 ]] || return 1
+    target="$(readlink "${path}")" || return 1
+    case "${target}" in /*) path="${target}" ;; *) path="${dir}/${target}" ;; esac
+  done
+  [[ "${path##*/}" == jack && "${dir##*/}" == bin ]] || return 1
+  root="${dir%/bin}"
+  # Helpers execute with the user's authority. Refuse symlinked, non-owned or
+  # group/other-writable helpers and checkout directories, rather than guessing.
+  for item in "${root}" "${root}/bin" "${root}/scripts" "${path}" \
+    "${root}/scripts/install-common.sh" "${root}/scripts/setup-macos.sh" \
+    "${root}/scripts/setup-workstation.sh"; do
+    [[ ! -L "${item}" && -O "${item}" ]] || return 1
+    case "${item}" in
+      "${root}"|"${root}/bin"|"${root}/scripts") [[ -d "${item}" ]] || return 1 ;;
+      *) [[ -f "${item}" ]] || return 1 ;;
+    esac
+    writable="$(find "${item}" -prune \( -perm -002 -o -perm -020 \) -print)" || return 1
+    [[ -z "${writable}" ]] || return 1
+  done
+  printf '%s\n' "${root}"
+)
+
+cmd_lifecycle() {
+  local action="$1" root script os
+  shift
+  if [[ $# -eq 1 && "$1" == --help ]]; then
+    printf 'Usage: jack %s [--help]\n' "${action}"
+    echo 'Manages only ~/.local/bin/jack for this source checkout; exact yes required for changes.'
+    echo 'Matching/absent links are no-ops. Other files/links are refused. No config, keys or profiles change.'
+    return 0
+  fi
+  [[ $# -eq 0 ]] || { echo 'jack: unexpected lifecycle arguments; use --help.' >&2; return 1; }
+  root="$(source_checkout)" || {
+    echo 'jack: cannot verify source checkout/helpers; inspect ownership, permissions and source location. Nothing changed.' >&2
+    return 1
+  }
+  os="$(uname -s)" || return 1
+  case "${os}" in
+    Darwin) script="${root}/scripts/setup-macos.sh" ;;
+    Linux) script="${root}/scripts/setup-workstation.sh" ;;
+    *) echo 'jack: lifecycle commands support macOS and Arch/CachyOS only.' >&2; return 1 ;;
+  esac
+  if [[ "${action}" == uninstall ]]; then
+    "${BASH}" "${script}" --uninstall
+  else
+    "${BASH}" "${script}"
+  fi
+}
+
+doctor_installation() {
+  local root link="${HOME}/.local/bin/jack" target
+  if ! root="$(source_checkout 2>/dev/null)"; then
+    doctor_line FAIL 'Installation: source checkout/helpers missing or unsafe. Inspect source location, ownership and permissions; no repair attempted.'
+  elif [[ -L "${link}" ]]; then
+    target="$(readlink "${link}")" || { doctor_line FAIL 'Installation: cannot inspect command link; no repair attempted.'; return; }
+    if [[ ! -f "${link}" || ! -x "${link}" ]]; then
+      doctor_line FAIL 'Installation: command link is broken or not executable; restore its source checkout or inspect it before reinstalling.'
+    elif [[ "${target}" == "${root}/bin/jack" ]]; then
+      doctor_line PASS 'Installation: command linked to this checkout.'
+    else
+      doctor_line WARN 'Installation: command link belongs to another checkout/uses a different path; inspect it before changing anything.'
+    fi
+  elif [[ -e "${link}" ]]; then
+    doctor_line WARN 'Installation: command path is user-managed; lifecycle commands will refuse replacement.'
+  else
+    doctor_line PASS 'Installation: running from source; no user-level command installed. Use ./bin/jack install if desired.'
+  fi
 }
 
 check_ssh() {
@@ -602,6 +682,7 @@ doctor_line() {
 cmd_doctor() {
   local doctor_fail=0 doctor_warn=0 os release line supported=0 parser_ok=0 state
   doctor_line PASS "JACK CLI: running (${JACK_VERSION}; source checkout identity)."
+  doctor_installation
   os="$(uname -s 2>/dev/null)" || os=Unknown
   case "${os}" in
     Darwin) doctor_line PASS 'Platform: macOS.' ;;
@@ -665,6 +746,9 @@ cmd_doctor() {
 }
 
 main() {
+  case "${1:-}" in
+    install|uninstall) cmd_lifecycle "$@"; return ;;
+  esac
   if [[ "${1:-}" == setup ]]; then
     shift
     cmd_setup "$@"

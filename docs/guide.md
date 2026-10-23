@@ -253,6 +253,41 @@ No package installation, service changes, SSH policy changes, or profile edits
 are performed. A failed/declined installation may be retried after inspecting its
 error; directories created just before a failed link operation may remain.
 
+### Lifecycle CLI in development checkouts (planned v0.1.1)
+
+The published v0.1.0 tag continues to use the scripts above. Development
+checkouts containing the lifecycle commands also support:
+
+```bash
+./bin/jack install
+jack uninstall
+# Or, without PATH: "$HOME/.local/bin/jack" uninstall
+```
+
+These commands delegate to the same platform scripts. `--help` explains each
+command. They show the source CLI and installation link before requiring exact
+`yes` for a change. Repeat installation and already-absent removal are no-ops;
+other files, directories and unrelated/dangling links are refused. Uninstall
+removes only the matching link, never its source checkout or user data.
+
+Direct invocation and the installed symlink support paths containing spaces.
+The CLI resolves at most 16 symlinks and refuses missing, symlinked or unsafe
+helpers and non-owned/group-or-other-writable checkout directories or helper
+files. Installation directories retain the existing safety checks. Legacy
+setup scripts remain supported. No automatic update or rollback is provided.
+
+Keep the source checkout in place. If it moved or disappeared, run `doctor` from
+an intact checkout to diagnose the broken installed link; a broken command cannot
+diagnose itself. Inspect the old link manually before any removal. `doctor` also
+warns about user-managed paths or links to another checkout, without repairing
+them. Its exit codes remain 0 pass, 1 failure and 2 warnings only.
+
+EOF or cancellation refuses the change. Failed filesystem operations report
+which step failed; newly created directories may remain and are never removed
+automatically. Config, SSH keys, services and profiles stay untouched. Path
+checks do not guarantee protection against every hostile same-user race.
+Native macOS acceptance of these development commands remains pending.
+
 ### Verify installation and PATH
 
 ```bash
