@@ -324,18 +324,57 @@ PASS never proves peer reachability, Tailscale SSH authorization, or authenticat
 
 ### Upgrade
 
-A release-tag checkout is pinned and detached: do not use `git pull` there.
-For a later published release, first inspect `git status` and preserve local work,
-fetch its tag, verify the release's documented source commit, and explicitly switch
-to that reviewed tag. No later release is assumed here, and no forced checkout or
-tag replacement is needed. The installed link then follows that selected source.
+Development checkouts containing the planned v0.1.1 update planner support
+`jack update` (or `./bin/jack update` before installation) and `jack update --help`.
+The published v0.1.0 tag does not include this command.
 
-For an explicitly chosen development checkout on a clean branch tracking `main`,
-`git pull --ff-only` remains the source-upgrade workflow. This follows development,
-not the fixed v0.1.0 release. Run `./scripts/dev-check.sh` and `jack doctor` after
-an approved update. Existing configuration and keys are not migrated or overwritten.
-If the checkout moved, inspect/remove its old symlink yourself before installing
-from the new location; JACK refuses to replace links to other checkouts.
+**Read-only update plan; no update performed.** No prompt or network access is
+used. The plan reports the trusted source path, local commit, branch/detached
+HEAD, up to 20 exact local `v`-numbered tags, working-tree state, local tracking
+ref when available, and installed-link relationship. Local tags do not establish
+publication, and tracking refs do not establish remote freshness. No target
+version is chosen. Paths with spaces and installed-symlink invocation work.
+
+Exit **0** means local planning completed, including a dirty-tree warning; it
+does not mean an update is available or safe to apply. Exit **1** means inspection
+is incomplete/unavailable (for example missing Git, unsafe source, malformed or
+absent metadata, or unknown status). Unexpected arguments also exit 1; help exits
+0. Non-Git copies cannot provide Git-based plans. A broken installed command
+cannot run itself: use an intact trusted checkout to inspect the existing link.
+The planner never replaces it or repairs Git metadata.
+
+Git queries disable optional index writes, filesystem monitors, automatic
+maintenance and lazy-fetch transports, and discard inherited `GIT_*` settings
+including repository redirects and trace destinations. Configured filter drivers
+cause status inspection to be skipped, because hashing files could execute them.
+Status then remains **unknown**. Submodule contents are not inspected. These are
+fixed local metadata/status queries, not a remote check or a time-limited scan;
+very large working trees can take longer. Existing SSH/status commands and their
+exit meanings are unchanged; no new dependency or version bump is introduced.
+
+For an owner-operated release upgrade, outside JACK:
+
+1. Inspect `git status` and record `git rev-parse HEAD`. Preserve tracked changes
+   and untracked files; do not force, reset or clean them away.
+2. Choose a specific published release yourself and review its documented source
+   commit, requirements and limitations. The planner cannot verify availability.
+3. Separately authorize any network access needed to obtain that specific tag.
+   Inspect its local tag/peeled commit and require an exact match to the reviewed
+   source SHA. Never replace an existing published tag or assume a tag is trusted
+   simply because it exists locally.
+4. With local work preserved and the checkout clean, explicitly switch to the
+   reviewed tag in detached HEAD state. Keep the checkout in place: the installed
+   link follows its source. Record the previous SHA for a separately reviewed
+   return to that source; no automatic rollback or discard is provided.
+5. Run `./scripts/dev-check.sh` and `jack doctor`; retain their actual outcomes.
+   Configuration and keys are not migrated or overwritten.
+
+Never use generic `git pull` on a detached release checkout. For a development
+branch, inspect its tracking configuration and local commits, then separately
+verify remote changes before deciding how to integrate. Do not assume the branch
+tracks `main` or that a fast-forward is possible. JACK performs none of these
+update operations. If a checkout moved, inspect its old link before any manual
+removal; installers refuse links to another checkout and never delete its source.
 
 ## Reverse access: workstation → Mac
 
