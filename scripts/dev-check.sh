@@ -989,6 +989,163 @@ check_installer_safety() {
   return "${ok}"
 }
 
+# Lifecycle routes run only in the same isolated HOME/PATH as legacy installers.
+check_lifecycle_cli() {
+  local src="${T}/source with spaces" link="${T}/home/.local/bin/jack"
+  local os action kind out rc ok=0 tool
+  mkdir -p "${src}/bin" "${src}/scripts"
+  cp "${JACK}" "${src}/bin/jack"
+  cp "${ROOT}/scripts/"setup-*.sh "${ROOT}/scripts/install-common.sh" "${src}/scripts/"
+  for os in Darwin Linux; do
+    setup_reset
+    FAKE_OS="${os}"
+    set_config "${VALID_CONFIG}"
+    chmod 600 "${T}/home/.config/jack/config" "${T}/expected-home/.config/jack/config"
+    mkdir -p "${T}/home/.ssh" "${T}/expected-home/.ssh"
+    printf 'synthetic key\n' > "${T}/home/.ssh/key"
+    printf 'synthetic profile\n' > "${T}/home/.profile"
+    chmod 600 "${T}/home/.ssh/key" "${T}/home/.profile"
+    cp -p "${T}/home/.ssh/key" "${T}/expected-home/.ssh/key"
+    cp -p "${T}/home/.profile" "${T}/expected-home/.profile"
+    for action in install uninstall; do
+      run_iso "${T}/bin-install" "${src}/bin/jack" "${action}" --help > /dev/null || ok=1
+      rc=0
+      run_iso "${T}/bin-install" "${src}/bin/jack" "${action}" extra < /dev/null > /dev/null 2>&1 || rc=$?
+      [[ "${rc}" -ne 0 ]] || { fail 'lifecycle accepted extra argument'; ok=1; }
+    done
+    for kind in no eof; do
+      rc=0
+      if [[ "${kind}" == no ]]; then
+        out="$(run_iso "${T}/bin-install" "${src}/bin/jack" install <<< no 2>&1)" || rc=$?
+      else
+        out="$(run_iso "${T}/bin-install" "${src}/bin/jack" install < /dev/null 2>&1)" || rc=$?
+      fi
+      [[ "${rc}" -ne 0 ]] || { fail 'lifecycle accepted cancellation/EOF'; ok=1; }
+      untouched || ok=1
+    done
+    out="$(run_iso "${T}/bin-install" "${src}/bin/jack" install <<< yes 2>&1)" || { fail "CLI install: ${out}"; ok=1; }
+    if ! contains "${out}" "Source CLI: ${src}/bin/jack" || ! contains "${out}" "Installation link: ${link}"; then fail 'missing path preview'; ok=1; fi
+    mkdir -p "${T}/expected-home/.local/bin"
+    ln -s "${src}/bin/jack" "${T}/expected-home/.local/bin/jack"
+    [[ "$(readlink "${link}")" == "${src}/bin/jack" ]] || { fail 'wrong CLI link'; ok=1; }
+    # Exercise PATH/shebang invocation, not just bash with a symlink argument.
+    link_tool "${T}/bin-install" bash || return 1
+    env -i HOME="${T}/home" PATH="${T}/bin-install" FAKE_OS="${os}" DOCTOR_DISTRO=arch \
+      STUB_LOG="${T}/calls.log" "${link}" install < /dev/null > /dev/null 2>&1 || { fail 'installed invocation/repeat'; ok=1; }
+    rm "${T}/bin-install/bash"
+    # Relative symlink chains resolve to the same trusted checkout.
+    ln -s 'source with spaces/bin/jack' "${T}/relative-jack"
+    run_iso "${T}/bin-install" "${T}/relative-jack" install < /dev/null > /dev/null 2>&1 || { fail 'relative symlink invocation'; ok=1; }
+    rm "${T}/relative-jack"
+    rc=0
+    out="$(doctor_run 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 2 ]] || ! contains "${out}" 'belongs to another checkout'; then fail 'other-checkout doctor'; ok=1; fi
+    : > "${T}/ts.log"
+    rc=0
+    out="$(run_iso "${T}/bin-doctor" "${src}/bin/jack" doctor 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'command linked to this checkout'; then fail 'matching-checkout doctor'; ok=1; fi
+    : > "${T}/ts.log"
+
+    for kind in no eof; do
+      rc=0
+      if [[ "${kind}" == no ]]; then
+        run_iso "${T}/bin-install" "${link}" uninstall <<< no > /dev/null 2>&1 || rc=$?
+      else
+        run_iso "${T}/bin-install" "${link}" uninstall < /dev/null > /dev/null 2>&1 || rc=$?
+      fi
+      [[ "${rc}" -ne 0 ]] || { fail 'uninstall accepted cancellation/EOF'; ok=1; }
+      untouched || ok=1
+    done
+    run_iso "${T}/bin-install" "${link}" uninstall <<< yes > /dev/null 2>&1 || { fail 'installed uninstall'; ok=1; }
+    rm "${T}/expected-home/.local/bin/jack"
+    run_iso "${T}/bin-install" "${src}/bin/jack" uninstall < /dev/null > /dev/null 2>&1 || { fail 'absent uninstall'; ok=1; }
+    run_iso "${T}/bin-install" "${src}/bin/jack" install <<< yes > /dev/null 2>&1 || { fail 'CLI reinstall'; ok=1; }
+    ln -s "${src}/bin/jack" "${T}/expected-home/.local/bin/jack"
+    untouched || ok=1
+    [[ -n "$(find "${T}/home/.config/jack/config" -perm 0600 -print)" && -n "$(find "${T}/home/.ssh/key" -perm 0600 -print)" && -n "$(find "${T}/home/.profile" -perm 0600 -print)" ]] || { fail 'fixture permissions changed'; ok=1; }
+    rm "${link}" "${T}/expected-home/.local/bin/jack"
+    for kind in file directory dangling unrelated; do
+      case "${kind}" in
+        file) printf 'unknown command\n' > "${link}" ;;
+        directory) mkdir "${link}" ;;
+        dangling) ln -s "${T}/does-not-exist" "${link}" ;;
+        unrelated) ln -s "${T}/home/.profile" "${link}" ;;
+      esac
+      for action in install uninstall; do
+        rc=0
+        out="$(run_iso "${T}/bin-install" "${src}/bin/jack" "${action}" <<< yes 2>&1)" || rc=$?
+        if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'refusing'; then fail "occupied ${kind} ${action}"; ok=1; fi
+      done
+      case "${kind}" in
+        directory) [[ -d "${link}" && ! -L "${link}" ]] || ok=1; rmdir "${link}" ;;
+        file) [[ "$(cat "${link}")" == 'unknown command' ]] || ok=1; rm "${link}" ;;
+        dangling) [[ "$(readlink "${link}")" == "${T}/does-not-exist" ]] || ok=1; rm "${link}" ;;
+        unrelated) [[ "$(readlink "${link}")" == "${T}/home/.profile" ]] || ok=1; rm "${link}" ;;
+      esac
+    done
+    untouched || ok=1
+  done
+  # Missing/unsafe helpers are refused before any mutation.
+  mv "${src}/scripts/install-common.sh" "${src}/scripts/helper-saved"
+  rc=0
+  out="$(run_iso "${T}/bin-install" "${src}/bin/jack" install <<< yes 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'cannot verify source'; then fail 'missing source helper accepted'; ok=1; fi
+  rc=0
+  out="$(run_iso "${T}/bin-doctor" "${src}/bin/jack" doctor 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" 'source checkout/helpers missing or unsafe'; then fail 'missing-source doctor'; ok=1; fi
+  : > "${T}/ts.log"
+  mv "${src}/scripts/helper-saved" "${src}/scripts/install-common.sh"
+  chmod o+w "${src}/scripts/install-common.sh"
+  rc=0
+  run_iso "${T}/bin-install" "${src}/bin/jack" install <<< yes > /dev/null 2>&1 || rc=$?
+  [[ "${rc}" -ne 0 ]] || { fail 'unsafe helper accepted'; ok=1; }
+  chmod o-w "${src}/scripts/install-common.sh"
+  [[ ! -s "${T}/ts.log" && ! -s "${T}/ssh.log" ]] || { fail 'lifecycle network side effect'; ok=1; }
+  # A broken installed link can only be diagnosed from an intact checkout.
+  ln -s "${T}/missing-source/bin/jack" "${link}"
+  rc=0
+  out="$(doctor_run 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" 'command link is broken'; then fail 'broken-link doctor'; ok=1; fi
+  : > "${T}/ts.log" # Doctor intentionally queries only the stubbed daemon status.
+  rm "${link}"
+  # Simulate another actor replacing the link between preview and confirmation.
+  ln -s "${src}/bin/jack" "${link}"
+  mv "${T}/bin-install/readlink" "${T}/readlink-real"
+  write_stub "${T}/bin-install/readlink" 'if [ -e "$HOME/readlink-seen" ]; then
+rm "$1"; ln -s "$HOME/.profile" "$1"
+else : > "$HOME/readlink-seen"; fi
+exec "${0%/*}/../readlink-real" "$@"'
+  rc=0
+  out="$(run_iso "${T}/bin-install" "${src}/bin/jack" uninstall <<< yes 2>&1)" || rc=$?
+  [[ "${rc}" -ne 0 ]] && contains "${out}" 'link changed' && [[ "$(readlink "${link}")" == "${T}/home/.profile" ]] || { fail 'changed-link removal not refused'; ok=1; }
+  rm "${T}/bin-install/readlink" "${link}" "${T}/home/readlink-seen"
+  mv "${T}/readlink-real" "${T}/bin-install/readlink"
+  # Fail each mutable operation without invoking real installation paths.
+  for tool in mkdir ln rm; do
+    [[ "${tool}" != rm ]] || ln -s "${src}/bin/jack" "${link}"
+    mv "${T}/bin-install/${tool}" "${T}/tool-real"
+    write_stub "${T}/bin-install/${tool}" 'exit 1'
+    rc=0
+    action=install
+    [[ "${tool}" != rm ]] || action=uninstall
+    out="$(run_iso "${T}/bin-install" "${src}/bin/jack" "${action}" <<< yes 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'failed'; then fail "failure diagnostic: ${tool}"; ok=1; fi
+    rm "${T}/bin-install/${tool}"
+    mv "${T}/tool-real" "${T}/bin-install/${tool}"
+    if [[ "${tool}" == rm ]]; then
+      [[ "$(readlink "${link}")" == "${src}/bin/jack" ]] || { fail 'failed removal changed link'; ok=1; }
+      rm "${link}"
+    else
+      [[ ! -e "${link}" && ! -L "${link}" ]] || { fail 'failed installation left link'; ok=1; }
+    fi
+  done
+  untouched || ok=1
+  [[ ! -s "${T}/ts.log" && ! -s "${T}/ssh.log" ]] || { fail 'lifecycle network side effect'; ok=1; }
+  setup_reset
+  FAKE_OS=Linux
+  return "${ok}"
+}
+
 installer_refuses() { # label pathdir os script expected-text
   local out rc=0
   FAKE_OS="$3"
@@ -1052,6 +1209,7 @@ fi
 run_check DOCTOR check_doctor
 run_check INSTALLER_SAFETY check_installer_safety
 run_check INSTALLER_REFUSAL check_installer_refusal
+run_check LIFECYCLE_CLI check_lifecycle_cli
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
