@@ -253,7 +253,7 @@ No package installation, service changes, SSH policy changes, or profile edits
 are performed. A failed/declined installation may be retried after inspecting its
 error; directories created just before a failed link operation may remain.
 
-### Lifecycle CLI in development checkouts (planned v0.1.1)
+### Lifecycle CLI in the v0.1.1 candidate (unpublished)
 
 The published v0.1.0 tag continues to use the scripts above. Development
 checkouts containing the lifecycle commands also support:
@@ -286,7 +286,13 @@ EOF or cancellation refuses the change. Failed filesystem operations report
 which step failed; newly created directories may remain and are never removed
 automatically. Config, SSH keys, services and profiles stay untouched. Path
 checks do not guarantee protection against every hostile same-user race.
-Native macOS acceptance of these development commands remains pending.
+Native macOS 15.7.7 ARM64 / system Bash 3.2.57 isolated acceptance passed:
+install/repeat/uninstall/reinstall, foreign-entry refusal, synthetic config/key/
+profile preservation, manual fixture-link recovery and cleanup. The native
+regression suite passed 21/21 groups. These results apply to the functional
+baseline plus the portable harness correction; see the [candidate evidence](release-notes-0.1.1.md).
+They do not establish a real-user installation upgrade or automatic rollback.
+Native execution of the new `0.1.1` version metadata has not been performed.
 
 ### Verify installation and PATH
 
@@ -324,7 +330,7 @@ PASS never proves peer reachability, Tailscale SSH authorization, or authenticat
 
 ### Upgrade
 
-Development checkouts containing the planned v0.1.1 update planner support
+Development checkouts containing the unpublished v0.1.1 update planner support
 `jack update` (or `./bin/jack update` before installation) and `jack update --help`.
 The published v0.1.0 tag does not include this command.
 
