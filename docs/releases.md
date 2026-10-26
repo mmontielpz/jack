@@ -7,18 +7,20 @@ See the [release notes and acceptance evidence](release-notes-0.1.0.md).
 The [historical RC draft](release-notes-0.1.0-rc.1.md) remains unchanged.
 
 The released tag identifies fixed source; later commits on `main` are development
-and do not alter v0.1.0. A development checkout may still report 0.1.0 until a
-reviewed version change, so record its full SHA as well as the version. Installing
-the release should use its tag as shown in the [user guide](guide.md).
+and do not alter v0.1.0. The current [v0.1.1 preparation](release-notes-0.1.1.md)
+reports `0.1.1` but is unpublished. Record the full SHA as well as the version;
+the label alone does not establish release or platform acceptance. Installing
+the published release should use its tag as shown in the [user guide](guide.md).
 
 ## Authoritative identity
 
 `JACK_VERSION` in [bin/jack](../bin/jack) is the single authoritative version
-constant. `jack --version` prints `jack 0.1.0` and exits 0 without reading
+constant. In this candidate, `jack --version` prints `jack 0.1.1` and exits 0 without reading
 configuration, writing files, querying Git or invoking network/dependency checks.
 It works without HOME or external commands; extra arguments are rejected.
 `jack doctor` uses the same constant. No companion VERSION file, runtime Git
 lookup, version inference or environment override is used.
+The immutable v0.1.0 source continues to report `jack 0.1.0`.
 
 Maintainers update that constant intentionally for a new version and update
 expected test output, documentation and notes in the same reviewed PR. A version

@@ -5,6 +5,8 @@
 JACK is a minimal CLI for reaching your own devices over Tailscale and SSH.
 
 Stable release: [v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0).
+The [v0.1.1 candidate](docs/release-notes-0.1.1.md) is unpublished; its version
+label does not indicate a published tag or release. Quick Start below installs v0.1.0.
 
 - Connect to a primary remote destination with `jack`, or a Mac with `jack mac`.
 - Configure destinations with guided setup, optional device discovery, or a plain configuration file.
@@ -58,6 +60,7 @@ when a destination is unused or unreachable, even if the other is usable.
 - [Contributing](CONTRIBUTING.md): offline checks, bugs, proposals and pull requests.
 - [Release policy](docs/releases.md): exact released source, versioning and acceptance.
 - [v0.1.0 release notes](docs/release-notes-0.1.0.md): evidence and accepted limitations.
+- [v0.1.1 candidate notes](docs/release-notes-0.1.1.md): changes, validation and remaining gates.
 - [Brand guidelines](docs/branding.md): vector assets, palette, provenance and usage.
 
 ## License
