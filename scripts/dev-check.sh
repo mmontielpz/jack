@@ -49,6 +49,8 @@ TRIPWIRE='printf "%s\n" "${0##*/} $*" >> "${STUB_LOG:-/dev/null}"; exit 99'
 
 make_fixtures() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/jack-dev-check.XXXXXX")" || return 1
+  # Match the product's physical source paths, including macOS /var aliases.
+  T="$(cd -P "${T}" && pwd -P)" || return 1
   mkdir "${T}/home" "${T}/expected-home" "${T}/bin-setup" "${T}/bin-discovery" "${T}/bin-doctor" "${T}/bin-install" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
   : > "${T}/calls.log"
   : > "${T}/ts.log"
@@ -1110,28 +1112,42 @@ check_lifecycle_cli() {
   rm "${link}"
   # Simulate another actor replacing the link between preview and confirmation.
   ln -s "${src}/bin/jack" "${link}"
-  mv "${T}/bin-install/readlink" "${T}/readlink-real"
-  write_stub "${T}/bin-install/readlink" 'if [ -e "$HOME/readlink-seen" ]; then
-rm "$1"; ln -s "$HOME/.profile" "$1"
-else : > "$HOME/readlink-seen"; fi
-exec "${0%/*}/../readlink-real" "$@"'
+  # macOS readlink selects its mode by basename; relocate, never rename it.
+  mkdir "${T}/readlink-real"
+  mv "${T}/bin-install/readlink" "${T}/readlink-real/readlink"
+  write_stub "${T}/bin-install/readlink" 'if [ "$1" = "$HOME/.local/bin/jack" ]; then
+  if [ -e "$HOME/readlink-seen" ]; then
+    rm "$1" && ln -s "$HOME/.profile" "$1" || exit 1
+    : > "$HOME/readlink-injected"
+  else : > "$HOME/readlink-seen"; fi
+fi
+exec "${0%/*}/../readlink-real/readlink" "$@"'
   rc=0
   out="$(run_iso "${T}/bin-install" "${src}/bin/jack" uninstall <<< yes 2>&1)" || rc=$?
-  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'link changed' || [[ "$(readlink "${link}")" != "${T}/home/.profile" ]]; then
+  if [[ ! -f "${T}/home/readlink-injected" || "${rc}" -eq 0 ]] || ! contains "${out}" 'link changed' || [[ "$(readlink "${link}")" != "${T}/home/.profile" ]]; then
     fail 'changed-link removal not refused'; ok=1
+  else
+    echo 'LIFECYCLE_CHANGED_LINK_INJECTION=PASS'
   fi
-  rm "${T}/bin-install/readlink" "${link}" "${T}/home/readlink-seen"
-  mv "${T}/readlink-real" "${T}/bin-install/readlink"
+  rm "${T}/bin-install/readlink" "${link}" "${T}/home/readlink-seen" "${T}/home/readlink-injected"
+  mv "${T}/readlink-real/readlink" "${T}/bin-install/readlink"
+  rmdir "${T}/readlink-real"
   # Fail each mutable operation without invoking real installation paths.
   for tool in mkdir ln rm; do
     [[ "${tool}" != rm ]] || ln -s "${src}/bin/jack" "${link}"
     mv "${T}/bin-install/${tool}" "${T}/tool-real"
-    write_stub "${T}/bin-install/${tool}" 'exit 1'
+    write_stub "${T}/bin-install/${tool}" 'printf "%s\n" "${0##*/}" > "$HOME/lifecycle-fault-reached"; exit 1'
     rc=0
     action=install
     [[ "${tool}" != rm ]] || action=uninstall
     out="$(run_iso "${T}/bin-install" "${src}/bin/jack" "${action}" <<< yes 2>&1)" || rc=$?
     if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'failed'; then fail "failure diagnostic: ${tool}"; ok=1; fi
+    if [[ ! -f "${T}/home/lifecycle-fault-reached" || "$(cat "${T}/home/lifecycle-fault-reached")" != "${tool}" ]]; then
+      fail "failure injection not reached: ${tool}"; ok=1
+    else
+      echo "LIFECYCLE_FAULT_INJECTION_${tool}=PASS"
+    fi
+    rm -f "${T}/home/lifecycle-fault-reached"
     rm "${T}/bin-install/${tool}"
     mv "${T}/tool-real" "${T}/bin-install/${tool}"
     if [[ "${tool}" == rm ]]; then
