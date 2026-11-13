@@ -332,6 +332,16 @@ check_reachable() {
   tailscale ping --c 1 --timeout 3s --until-direct=false "$1" >/dev/null 2>&1
 }
 
+# TCP connect to the SSH port (bash /dev/tcp; no auth, no data). Only meaningful
+# after check_reachable succeeds. JACK_SSH_PORT overrides the default port 22.
+check_ssh_port() {
+  local t=""
+  command -v timeout >/dev/null 2>&1 && t="timeout 3"
+  # shellcheck disable=SC2086
+  # shellcheck disable=SC2016
+  ${t} "${BASH}" -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$1" "${JACK_SSH_PORT:-22}" >/dev/null 2>&1
+}
+
 require_ssh() {
   if ! check_ssh; then
     echo "jack: ssh is not installed; run jack doctor for prerequisites" >&2
@@ -363,7 +373,12 @@ status_device() {
     echo "${label}: configured ${user}@${host} — unknown"
     return 1
   elif check_reachable "${host}"; then
-    echo "${label}: configured ${user}@${host} — reachable"
+    if check_ssh_port "${host}"; then
+      echo "${label}: configured ${user}@${host} — reachable; SSH available"
+    else
+      echo "${label}: configured ${user}@${host} — reachable; SSH unavailable (port ${JACK_SSH_PORT:-22} closed or filtered)"
+      return 1
+    fi
   else
     echo "${label}: configured ${user}@${host} — unreachable"
     return 1
@@ -871,30 +886,34 @@ cmd_status_json() {
     ok=1
   fi
 
-  local ws_reach="unknown" mac_reach="unknown"
+  local ws_reach="unknown" mac_reach="unknown" ws_ssh="unknown" mac_ssh="unknown"
   if [[ "${ts_status}" == "connected" ]]; then
-    if [[ -n "${WORKSTATION_HOST}" ]] && check_reachable "${WORKSTATION_HOST}"; then
-      ws_reach="reachable"
-    elif [[ -n "${WORKSTATION_HOST}" ]]; then
-      ws_reach="unreachable"
-      ok=1
+    if [[ -n "${WORKSTATION_HOST}" ]]; then
+      if check_reachable "${WORKSTATION_HOST}"; then
+        ws_reach="reachable"
+        if check_ssh_port "${WORKSTATION_HOST}"; then ws_ssh="available"; else ws_ssh="unavailable"; ok=1; fi
+      else
+        ws_reach="unreachable"; ok=1
+      fi
     fi
-    if [[ -n "${MAC_HOST}" ]] && check_reachable "${MAC_HOST}"; then
-      mac_reach="reachable"
-    elif [[ -n "${MAC_HOST}" ]]; then
-      mac_reach="unreachable"
-      ok=1
+    if [[ -n "${MAC_HOST}" ]]; then
+      if check_reachable "${MAC_HOST}"; then
+        mac_reach="reachable"
+        if check_ssh_port "${MAC_HOST}"; then mac_ssh="available"; else mac_ssh="unavailable"; ok=1; fi
+      else
+        mac_reach="unreachable"; ok=1
+      fi
     fi
   else
     ok=1
   fi
 
-  printf '{"subsystem":"jack","version":"%s","status":"%s","tailscale":"%s","ssh_client":"%s","devices":{"workstation":{"configured":%s,"host":"%s","reachability":"%s"},"mac":{"configured":%s,"host":"%s","reachability":"%s"}}}\n' \
+  printf '{"subsystem":"jack","version":"%s","status":"%s","tailscale":"%s","ssh_client":"%s","devices":{"workstation":{"configured":%s,"host":"%s","reachability":"%s","ssh":"%s"},"mac":{"configured":%s,"host":"%s","reachability":"%s","ssh":"%s"}}}\n' \
     "${JACK_VERSION}" \
     "$([[ ${ok} -eq 0 ]] && echo 'HEALTHY' || echo 'DEGRADED')" \
     "${ts_status}" "${ssh_status}" \
-    "$([[ -n "${WORKSTATION_HOST}" ]] && echo 'true' || echo 'false')" "${WORKSTATION_HOST}" "${ws_reach}" \
-    "$([[ -n "${MAC_HOST}" ]] && echo 'true' || echo 'false')" "${MAC_HOST}" "${mac_reach}"
+    "$([[ -n "${WORKSTATION_HOST}" ]] && echo 'true' || echo 'false')" "${WORKSTATION_HOST}" "${ws_reach}" "${ws_ssh}" \
+    "$([[ -n "${MAC_HOST}" ]] && echo 'true' || echo 'false')" "${MAC_HOST}" "${mac_reach}" "${mac_ssh}"
   return "${ok}"
 }
 
