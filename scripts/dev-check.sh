@@ -128,13 +128,40 @@ case "${DOCTOR_STATE}" in invalid) exit 1 ;; *) printf "%s\n" "${DOCTOR_STATE}" 
 FAKE_OS=Linux
 TS_STATE=Stopped
 TS_PING_RC=1
+JACK_SSH_PORT=""
 
 run_iso() { # pathdir command args...
   local p="$1"
   shift
   env -i HOME="${T}/home" PATH="${p}" TERM=dumb STUB_LOG="${T}/calls.log" \
     DOCTOR_DISTRO="${DOCTOR_DISTRO:-arch}" DOCTOR_STATE="${DOCTOR_STATE:-Running}" DISCOVERY_OUTPUT="${T}/discovery-output" LC_ALL=C SSH_LOG="${T}/ssh.log" TS_PING_RC="${TS_PING_RC}" \
-    TS_LOG="${T}/ts.log" TS_STATE="${TS_STATE}" FAKE_OS="${FAKE_OS}" "${BASH}" "$@"
+    JACK_SSH_PORT="${JACK_SSH_PORT:-}" TS_LOG="${T}/ts.log" TS_STATE="${TS_STATE}" FAKE_OS="${FAKE_OS}" "${BASH}" "$@"
+}
+
+LISTENER_PID=""
+start_listener() { # sets JACK_SSH_PORT to a loopback-only listening port; returns 1 without python3
+  command -v python3 >/dev/null 2>&1 || return 1
+  rm -f "${T}/listener.port"
+  python3 -c 'import socket,sys,time
+s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(5)
+print(s.getsockname()[1]); sys.stdout.flush(); time.sleep(60)' > "${T}/listener.port" 2>/dev/null </dev/null &
+  LISTENER_PID=$!
+
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [[ -s "${T}/listener.port" ]] && break
+    sleep 0.1
+  done
+  JACK_SSH_PORT="$(cat "${T}/listener.port")"
+  [[ -n "${JACK_SSH_PORT}" ]]
+}
+stop_listener() {
+  [[ -n "${LISTENER_PID}" ]] && kill "${LISTENER_PID}" 2>/dev/null
+  wait "${LISTENER_PID}" 2>/dev/null
+  LISTENER_PID=""; JACK_SSH_PORT=""
+}
+closed_port() { # a loopback port with no listener
+  python3 -c 'import socket
+s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
 }
 
 untouched() { # tripwires silent, fake HOME matches the fixture
@@ -188,7 +215,7 @@ check_version() {
     esac
     rc=0
     out="$(run_iso "${T}/bin-version" "${T}/standalone-jack" --version 2>&1)" || rc=$?
-    if [[ "${rc}" -ne 0 || "${out}" != 'jack 0.1.0' ]]; then
+    if [[ "${rc}" -ne 0 || "${out}" != 'jack 0.1.1' ]]; then
       fail "--version ${scenario}: unexpected result (rc=${rc})"; ok=1
     fi
     untouched || ok=1
@@ -196,7 +223,7 @@ check_version() {
   # Even an absent HOME and empty PATH need no fallback, files or commands.
   rc=0
   out="$(env -i PATH= "${BASH}" "${JACK}" --version 2>&1)" || rc=$?
-  [[ "${rc}" -eq 0 && "${out}" == 'jack 0.1.0' ]] || { fail '--version requires environment/tools'; ok=1; }
+  [[ "${rc}" -eq 0 && "${out}" == 'jack 0.1.1' ]] || { fail '--version requires environment/tools'; ok=1; }
   rc=0
   out="$(run_iso "${T}/bin-version" "${JACK}" --version extra 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'too many arguments'; then
@@ -369,9 +396,16 @@ check_config_routing() {
   set_config "# comment
 
 ${VALID_CONFIG}"
-  rc=0
-  out="$(run_iso "${T}/bin-route" "${JACK}" --status 2>&1)" || rc=$?
-  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '— reachable' || ! contains "${out}" 'authentication not tested'; then fail 'reachable status'; ok=1; fi
+  if start_listener; then
+    set_config $'WORKSTATION_USER=alex\nWORKSTATION_HOST=127.0.0.1\nMAC_USER=alex\nMAC_HOST=127.0.0.1'
+    rc=0
+    out="$(run_iso "${T}/bin-route" "${JACK}" --status 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '— reachable; SSH available' || ! contains "${out}" 'authentication not tested'; then fail 'reachable status'; ok=1; fi
+    stop_listener
+    set_config "# comment
+
+${VALID_CONFIG}"
+  fi
   TS_PING_RC=1
   : > "${T}/ssh.log"
   rc=0
@@ -385,7 +419,7 @@ ${VALID_CONFIG}"
   rc=0
   out="$(run_iso "${T}/bin-route" "${JACK}" 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'Workstation unconfigured'; then fail 'missing workstation'; ok=1; fi
-  set_config $'WORKSTATION_USER=alex\nWORKSTATION_HOST=workstation'
+  set_config $'WORKSTATION_USER=alex\nWORKSTATION_HOST=127.0.0.1'
   run_iso "${T}/bin-route" "${JACK}" || ok=1
   rc=0
   out="$(run_iso "${T}/bin-route" "${JACK}" mac 2>&1)" || rc=$?
@@ -419,6 +453,42 @@ setup_expect_fail() {
   out="$(setup_run "$@" < /dev/null 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]]; then fail "setup unexpectedly accepted: $*"; return 1; fi
   untouched
+}
+
+check_ssh_status() {
+  local out rc ok=0
+  if ! command -v python3 >/dev/null 2>&1; then echo '  SSH_STATUS: python3 absent; listener fixture unavailable'; return 0; fi
+  set_config $'WORKSTATION_USER=alex\nWORKSTATION_HOST=127.0.0.1\nMAC_USER=alex\nMAC_HOST=127.0.0.1'
+  TS_STATE=Running
+
+  # Tailscale reachable + SSH available.
+  TS_PING_RC=0
+  start_listener || { fail 'listener fixture'; return 1; }
+  rc=0; out="$(run_iso "${T}/bin-route" "${JACK}" --status 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" 'Workstation: configured alex@127.0.0.1 — reachable; SSH available'; then fail "ssh available text (rc=${rc})"; ok=1; fi
+  rc=0; out="$(run_iso "${T}/bin-route" "${JACK}" --status --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '"reachability":"reachable","ssh":"available"'; then fail "ssh available json (rc=${rc})"; ok=1; fi
+  stop_listener
+
+  # Tailscale reachable + SSH unavailable (connection refused).
+  JACK_SSH_PORT="$(closed_port)"
+  rc=0; out="$(run_iso "${T}/bin-route" "${JACK}" --status 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" '— reachable; SSH unavailable'; then fail "ssh unavailable text (rc=${rc})"; ok=1; fi
+  rc=0; out="$(run_iso "${T}/bin-route" "${JACK}" --status --json 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" '"reachability":"reachable","ssh":"unavailable"' || ! contains "${out}" '"status":"DEGRADED"'; then fail "ssh unavailable json (rc=${rc})"; ok=1; fi
+
+  # Destination offline: the port must not be probed.
+  TS_PING_RC=1
+  rc=0; out="$(run_iso "${T}/bin-route" "${JACK}" --status 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" '— unreachable'; then fail "offline text (rc=${rc})"; ok=1; fi
+  if contains "${out}" 'SSH available' ; then fail 'offline reported SSH available'; ok=1; fi
+  rc=0; out="$(run_iso "${T}/bin-route" "${JACK}" --status --json 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] || ! contains "${out}" '"reachability":"unreachable","ssh":"unknown"'; then fail "offline json (rc=${rc})"; ok=1; fi
+
+  JACK_SSH_PORT=""; TS_STATE=Stopped; TS_PING_RC=1
+  clear_config
+  untouched || ok=1
+  return "${ok}"
 }
 
 check_setup_interactive() {
@@ -887,7 +957,7 @@ check_doctor() {
     rc=0
     out="$(doctor_run 2>&1)" || rc=$?
     if [[ "${rc}" -ne "${expected}" ]]; then fail "doctor ${scenario}: rc=${rc}, ${out}"; ok=1; fi
-    contains "${out}" 'JACK CLI: running (0.1.0; source checkout identity).' || { fail 'doctor version identity mismatch'; ok=1; }
+    contains "${out}" 'JACK CLI: running (0.1.1; source checkout identity).' || { fail 'doctor version identity mismatch'; ok=1; }
     contains "${out}" 'Doctor is read-only' || { fail 'doctor did not finish checks'; ok=1; }
     if contains "${out}" 'secret' || contains "${out}" '100.101.102.103' || contains "${out}" 'mac.example.ts.net'; then fail 'doctor disclosed config values'; ok=1; fi
     [[ ! -e "${T}/home/leak" ]] || { fail 'doctor executed config'; ok=1; }
@@ -1451,6 +1521,7 @@ run_check UNKNOWN_ARGUMENT check_unknown_argument
 run_check OFFLINE_STATUS check_offline_status
 run_check CONFIG_ERRORS check_config_errors
 run_check CONFIG_ROUTING check_config_routing
+run_check SSH_STATUS check_ssh_status
 run_check SETUP_INTERACTIVE check_setup_interactive
 run_check SETUP_AUTOMATION check_setup_automation
 run_check SETUP_CANCEL_WRITE_FAILURE check_setup_cancel_and_write_failure

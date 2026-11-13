@@ -4,6 +4,12 @@
 Its annotated tag `v0.1.0` points to the exact source commit
 `e2d16a21c810e9addcc65c2b5412795aa1d44422`.
 See the [release notes and acceptance evidence](release-notes-0.1.0.md).
+
+The current source identity is **0.1.1**, the stable release prepared on
+`release/v0.1.1`. See the [0.1.1 release notes](release-notes-0.1.1.md). The
+release-candidate history is preserved: [0.1.1-rc.2](release-notes-0.1.1-rc.2.md)
+(tag `v0.1.1-rc.2`) and [0.1.1-rc.1](release-notes-0.1.1-rc.1.md) (local only,
+superseded). v0.1.0 remains unchanged.
 The [historical RC draft](release-notes-0.1.0-rc.1.md) remains unchanged.
 
 The released tag identifies fixed source; later commits on `main` are development
@@ -14,7 +20,7 @@ the release should use its tag as shown in the [user guide](guide.md).
 ## Authoritative identity
 
 `JACK_VERSION` in [bin/jack](../bin/jack) is the single authoritative version
-constant. `jack --version` prints `jack 0.1.0` and exits 0 without reading
+constant. `jack --version` prints `jack 0.1.1` and exits 0 without reading
 configuration, writing files, querying Git or invoking network/dependency checks.
 It works without HOME or external commands; extra arguments are rejected.
 `jack doctor` uses the same constant. No companion VERSION file, runtime Git

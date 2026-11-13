@@ -394,6 +394,60 @@ On the Mac, once:
 
 Do not forward port 22 on your router. The Mac is only reached over Tailscale.
 
+## RESTORE
+
+Recover a JACK checkout and its local setup from a backup. Nothing here needs
+secrets: configuration holds only usernames and hostnames, and SSH keys stay in
+your own SSH agent.
+
+1. **Backup artifacts.** A backup set is a timestamped Git bundle
+   (`jack-<UTC>.bundle`), its checksum file (`jack-<UTC>.sha256`), and, when
+   work was uncommitted, a patch (`jack-<UTC>-uncommitted.patch`). Keep older
+   sets; never overwrite them.
+2. **Verify SHA256** before using anything:
+
+   ```bash
+   cd /path/to/jack-backups
+   sha256sum -c jack-<UTC>.sha256
+   ```
+
+3. **Restore from the bundle** into a new directory:
+
+   ```bash
+   git bundle verify jack-<UTC>.bundle
+   git clone jack-<UTC>.bundle jack-restored
+   cd jack-restored
+   git checkout chore/stable-release-preparation-14e   # or the branch you need
+   ```
+
+4. **Apply the patch only if needed** (the bundle predates uncommitted work):
+
+   ```bash
+   git apply --check ../jack-backups/jack-<UTC>-uncommitted.patch
+   git apply ../jack-backups/jack-<UTC>-uncommitted.patch
+   ```
+
+5. **Recover local configuration.** Configuration is not in the bundle. Run
+   `jack setup`, or recreate `$HOME/.config/jack/config` as described in
+   [Manual configuration alternative](#manual-configuration-alternative) using
+   your own accounts and tailnet addresses.
+6. **CLI setup and doctor.** Install the symlink with the setup script for the
+   machine (`./scripts/setup-workstation.sh` or `./scripts/setup-macos.sh`),
+   then validate:
+
+   ```bash
+   jack doctor
+   jack --status
+   ```
+
+   `--status` reports `reachable; SSH available` only when the SSH port accepts
+   a TCP connection; it does not test authentication.
+7. **Real E2E smoke test.** From a shell on a connected machine, run
+   `jack` (or `jack mac`) and confirm an interactive SSH session opens on the
+   destination, then exit. This is the only check that proves authentication.
+   Optionally run `scripts/dev-check.sh` and `tests/test_governed_repair.sh`
+   for offline verification.
+
 ## Uninstall
 
 ```bash
