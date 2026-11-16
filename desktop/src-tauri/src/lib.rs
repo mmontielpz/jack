@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const RESERVED_ALIASES: &[&str] = &[
     "workstation", "mac", "add", "connect", "devices", "default", "status", "doctor",
@@ -11,20 +14,20 @@ const RESERVED_ALIASES: &[&str] = &[
 
 pub fn validate_device_alias(alias: &str) -> Result<(), String> {
     if alias.is_empty() || alias.len() > 32 {
-        return Err("El alias debe tener entre 1 y 32 caracteres.".into());
+        return Err("Alias must be between 1 and 32 characters.".into());
     }
     let bytes = alias.as_bytes();
     if !(bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit()) {
-        return Err("El alias debe iniciar con minúscula o dígito.".into());
+        return Err("Alias must start with a lowercase letter or digit.".into());
     }
     if !bytes
         .iter()
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-' || *b == b'_')
     {
-        return Err("El alias solo permite minúsculas, dígitos, '-' y '_'.".into());
+        return Err("Alias may only contain lowercase letters, digits, '-' and '_'.".into());
     }
     if RESERVED_ALIASES.contains(&alias) {
-        return Err(format!("El alias '{}' está reservado por JACK CLI.", alias));
+        return Err(format!("Alias '{}' is reserved by JACK CLI.", alias));
     }
     Ok(())
 }
@@ -38,54 +41,54 @@ pub fn validate_default_alias(alias: &str) -> Result<(), String> {
 
 pub fn validate_user(user: &str) -> Result<(), String> {
     if user.is_empty() || user.len() > 64 {
-        return Err("El usuario SSH debe tener entre 1 y 64 caracteres.".into());
+        return Err("SSH username must be between 1 and 64 characters.".into());
     }
     let bytes = user.as_bytes();
     if !(bytes[0].is_ascii_alphabetic() || bytes[0] == b'_') {
-        return Err("El usuario SSH debe iniciar con una letra o '_'.".into());
+        return Err("SSH username must start with a letter or '_'.".into());
     }
     if !bytes
         .iter()
         .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'.' || *b == b'-')
     {
-        return Err("El usuario SSH contiene caracteres no permitidos.".into());
+        return Err("SSH username contains unsupported characters.".into());
     }
     Ok(())
 }
 
 pub fn validate_host(host: &str) -> Result<(), String> {
     if host.is_empty() || host.len() > 253 {
-        return Err("La dirección o hostname debe tener entre 1 y 253 caracteres.".into());
+        return Err("Host address must be between 1 and 253 characters.".into());
     }
     if host.starts_with('-') {
-        return Err("La dirección no puede iniciar con '-'.".into());
+        return Err("Host address cannot start with '-'.".into());
     }
     if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
         let parts: Vec<&str> = host.split('.').collect();
         if parts.len() != 4 {
-            return Err("Dirección IPv4 inválida.".into());
+            return Err("Invalid IPv4 address.".into());
         }
         for part in parts {
             if part.is_empty() || (part.len() > 1 && part.starts_with('0')) {
-                return Err("Octeto IPv4 inválido.".into());
+                return Err("Invalid IPv4 octet.".into());
             }
-            let val: u16 = part.parse().map_err(|_| "Octeto IPv4 inválido.".to_string())?;
+            let val: u16 = part.parse().map_err(|_| "Invalid IPv4 octet.".to_string())?;
             if val > 255 {
-                return Err("Octeto IPv4 fuera de rango.".into());
+                return Err("IPv4 octet out of range.".into());
             }
         }
         return Ok(());
     }
     for label in host.split('.') {
         if label.is_empty() || label.len() > 63 {
-            return Err("Hostname inválido.".into());
+            return Err("Invalid hostname.".into());
         }
         let b = label.as_bytes();
         if !b[0].is_ascii_alphanumeric() || !b[b.len() - 1].is_ascii_alphanumeric() {
-            return Err("Hostname inválido.".into());
+            return Err("Invalid hostname.".into());
         }
         if !b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-') {
-            return Err("Hostname contiene caracteres no permitidos.".into());
+            return Err("Hostname contains unsupported characters.".into());
         }
     }
     Ok(())
@@ -104,6 +107,20 @@ fn resolve_jack_bin() -> PathBuf {
     PathBuf::from("jack")
 }
 
+fn resolve_effective_home() -> Result<PathBuf, String> {
+    if let Ok(home) = env::var("JACK_HOME") {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home));
+        }
+    }
+    if let Ok(home) = env::var("HOME") {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home));
+        }
+    }
+    Err("Could not determine HOME directory.".into())
+}
+
 fn apply_isolated_home(cmd: &mut Command) {
     if let Ok(home) = env::var("JACK_HOME") {
         if !home.is_empty() {
@@ -119,7 +136,7 @@ fn run_jack(args: &[&str]) -> Result<(i32, String, String), String> {
     apply_isolated_home(&mut cmd);
     let out = cmd
         .output()
-        .map_err(|e| format!("No se pudo ejecutar JACK CLI ({}): {}", bin.display(), e))?;
+        .map_err(|e| format!("Failed to execute JACK CLI ({}): {}", bin.display(), e))?;
     let code = out.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -180,6 +197,20 @@ pub struct WizardSaveRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PreflightCheckItem {
+    pub name: String,
+    pub status: String, // "PASS" | "WARNING" | "FAIL"
+    pub detail: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PreflightResult {
+    pub overall: String, // "PASS" | "WARNING" | "FAIL"
+    pub can_save: bool,
+    pub checks: Vec<PreflightCheckItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SaveResult {
     pub saved: bool,
     pub devices: Vec<DeviceEntry>,
@@ -195,9 +226,25 @@ pub struct ConnectResult {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResetPreview {
+    pub config_path: String,
+    pub config_exists: bool,
+    pub backup_dir: String,
+    pub preserved_items: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResetResult {
+    pub reset: bool,
+    pub backup_path: Option<String>,
+    pub affected_files: Vec<String>,
+    pub message: String,
+}
+
 pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String> {
     let val: serde_json::Value =
-        serde_json::from_str(raw).map_err(|_| "Respuesta inválida de tailscale status.".to_string())?;
+        serde_json::from_str(raw).map_err(|_| "Invalid response from tailscale status.".to_string())?;
     let state = val
         .get("BackendState")
         .and_then(|v| v.as_str())
@@ -235,7 +282,7 @@ pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String>
                 .map(|arr| {
                     arr.iter()
                         .filter_map(|x| x.as_str())
-                        .filter(|ip| ip.contains('.')) // IPv4 preferred for JACK config
+                        .filter(|ip| ip.contains('.'))
                         .map(|s| s.to_string())
                         .collect()
                 })
@@ -263,7 +310,7 @@ pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String>
             let os = peer
                 .get("OS")
                 .and_then(|v| v.as_str())
-                .unwrap_or("Desconocido")
+                .unwrap_or("Unknown")
                 .to_string();
             let online = peer.get("Online").and_then(|v| v.as_bool()).unwrap_or(false);
             let is_windows = os.to_ascii_lowercase().contains("windows");
@@ -283,9 +330,9 @@ pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String>
         backend_state: state.clone(),
         peers,
         message: if state == "Running" {
-            "Dispositivos de Tailscale obtenidos (solo descubrimiento; no prueba acceso SSH).".into()
+            "Tailscale peers discovered (discovery does not verify SSH authentication).".into()
         } else {
-            format!("Tailscale está en estado '{}'. Puedes ingresar la dirección manualmente.", state)
+            format!("Tailscale state is '{}'. You can enter an address manually.", state)
         },
     })
 }
@@ -304,17 +351,17 @@ fn get_platform_info() -> PlatformInfo {
     let os = env::consts::OS.to_string();
     let is_wsl2 = if os == "linux" {
         env::var("WSL_INTEROP").is_ok()
-            || std::fs::read_to_string("/proc/version")
+            || fs::read_to_string("/proc/version")
                 .map(|v| v.to_ascii_lowercase().contains("wsl2") || v.to_ascii_lowercase().contains("microsoft"))
                 .unwrap_or(false)
     } else {
         false
     };
     let supported_note = match os.as_str() {
-        "linux" if is_wsl2 => "Linux (WSL2 Ubuntu): compatible mediante adaptador Linux.".into(),
-        "linux" => "Linux (Arch/CachyOS y Ubuntu): compatible.".into(),
-        "windows" => "Windows nativo: requiere ruta WSL2 Ubuntu validada.".into(),
-        _ => format!("Plataforma '{}': soporte diferido en V0.1.", os),
+        "linux" if is_wsl2 => "Linux (WSL2 Ubuntu): supported via Linux adapter.".into(),
+        "linux" => "Linux (Arch/CachyOS and Ubuntu): supported.".into(),
+        "windows" => "Windows native: requires validated WSL2 Ubuntu path.".into(),
+        _ => format!("Platform '{}': support deferred in V0.1.", os),
     };
     PlatformInfo {
         os,
@@ -330,7 +377,7 @@ fn list_devices() -> Result<Vec<DeviceEntry>, String> {
         return Err(if stderr.is_empty() { stdout } else { stderr });
     }
     let parsed: DevicesResponse = serde_json::from_str(&stdout)
-        .map_err(|e| format!("Error al leer la lista de dispositivos: {}", e))?;
+        .map_err(|e| format!("Failed to parse device list: {}", e))?;
     Ok(parsed.devices)
 }
 
@@ -340,10 +387,10 @@ fn get_device_status(alias: String) -> Result<serde_json::Value, String> {
     let (_code, stdout, stderr) = run_jack(&["status", &alias, "--json"])?;
     if stdout.starts_with('{') {
         serde_json::from_str(&stdout)
-            .map_err(|e| format!("Error al interpretar el estado: {}", e))
+            .map_err(|e| format!("Failed to parse device status: {}", e))
     } else {
         Err(if stderr.is_empty() {
-            "No se pudo consultar el estado del dispositivo.".into()
+            "Could not query device status.".into()
         } else {
             stderr
         })
@@ -355,10 +402,10 @@ fn run_doctor() -> Result<serde_json::Value, String> {
     let (_code, stdout, stderr) = run_jack(&["doctor", "--json"])?;
     if stdout.starts_with('{') {
         serde_json::from_str(&stdout)
-            .map_err(|e| format!("Error al interpretar jack doctor: {}", e))
+            .map_err(|e| format!("Failed to parse jack doctor output: {}", e))
     } else {
         Err(if stderr.is_empty() {
-            "No se pudo ejecutar jack doctor.".into()
+            "Could not run jack doctor.".into()
         } else {
             stderr
         })
@@ -370,10 +417,10 @@ fn run_diagnose() -> Result<serde_json::Value, String> {
     let (_code, stdout, stderr) = run_jack(&["diagnose", "--json"])?;
     if stdout.starts_with('{') {
         serde_json::from_str(&stdout)
-            .map_err(|e| format!("Error al interpretar jack diagnose: {}", e))
+            .map_err(|e| format!("Failed to parse jack diagnose output: {}", e))
     } else {
         Err(if stderr.is_empty() {
-            "No se pudo ejecutar jack diagnose.".into()
+            "Could not run jack diagnose.".into()
         } else {
             stderr
         })
@@ -400,9 +447,9 @@ fn discover_tailscale_peers() -> DiscoveryResult {
                 backend_state: "Disconnected".into(),
                 peers: vec![],
                 message: if stderr.is_empty() {
-                    "Tailscale no está conectado. Puedes ingresar la dirección manualmente.".into()
+                    "Tailscale is not connected. You can enter a host address manually.".into()
                 } else {
-                    format!("Tailscale no disponible ({}). Ingresa la dirección manualmente.", stderr)
+                    format!("Tailscale unavailable ({}). Enter a host address manually.", stderr)
                 },
             }
         }
@@ -410,15 +457,164 @@ fn discover_tailscale_peers() -> DiscoveryResult {
             available: false,
             backend_state: "NotInstalled".into(),
             peers: vec![],
-            message: "Tailscale CLI no está instalado. Puedes configurar un destino SSH directo manualmente.".into(),
+            message: "Tailscale CLI is not installed. You can configure a direct SSH host manually.".into(),
         },
+    }
+}
+
+#[tauri::command]
+fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
+    let mut checks = Vec::new();
+    let mut has_fail = false;
+
+    // 1. Input syntax & required fields
+    let syntax_res: Result<(), String> = match req.mode.as_str() {
+        "workstation" => {
+            validate_user(req.workstation_user.as_deref().unwrap_or(""))
+                .and_then(|_| validate_host(req.workstation_host.as_deref().unwrap_or("")))
+        }
+        "mac" => {
+            validate_user(req.mac_user.as_deref().unwrap_or(""))
+                .and_then(|_| validate_host(req.mac_host.as_deref().unwrap_or("")))
+        }
+        "both" => validate_user(req.workstation_user.as_deref().unwrap_or(""))
+            .and_then(|_| validate_host(req.workstation_host.as_deref().unwrap_or("")))
+            .and_then(|_| validate_user(req.mac_user.as_deref().unwrap_or("")))
+            .and_then(|_| validate_host(req.mac_host.as_deref().unwrap_or(""))),
+        "device" => validate_device_alias(req.device_alias.as_deref().unwrap_or(""))
+            .and_then(|_| validate_user(req.device_user.as_deref().unwrap_or("")))
+            .and_then(|_| validate_host(req.device_host.as_deref().unwrap_or(""))),
+        _ => Err("Unsupported configuration mode.".into()),
+    };
+
+    match syntax_res {
+        Ok(()) => checks.push(PreflightCheckItem {
+            name: "Local input validation".into(),
+            status: "PASS".into(),
+            detail: "Alias, host address, and SSH username syntax are valid.".into(),
+        }),
+        Err(e) => {
+            has_fail = true;
+            checks.push(PreflightCheckItem {
+                name: "Local input validation".into(),
+                status: "FAIL".into(),
+                detail: e,
+            });
+        }
+    }
+
+    // 2. Existing config conflict check (duplicate alias for named devices)
+    if req.mode == "device" {
+        if let Some(alias) = req.device_alias.as_deref() {
+            if let Ok(existing) = list_devices() {
+                if existing.iter().any(|d| d.alias == alias) {
+                    has_fail = true;
+                    checks.push(PreflightCheckItem {
+                        name: "Configuration conflict".into(),
+                        status: "FAIL".into(),
+                        detail: format!("Device alias '{}' already exists; refusing to overwrite.", alias),
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. JACK CLI & SSH client availability
+    match get_cli_version() {
+        Ok(v) => checks.push(PreflightCheckItem {
+            name: "JACK CLI".into(),
+            status: "PASS".into(),
+            detail: format!("Available ({}).", v),
+        }),
+        Err(e) => {
+            has_fail = true;
+            checks.push(PreflightCheckItem {
+                name: "JACK CLI".into(),
+                status: "FAIL".into(),
+                detail: e,
+            });
+        }
+    }
+
+    if let Ok(doc) = run_doctor() {
+        let ssh_ok = doc
+            .pointer("/checks/ssh/client_available")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if ssh_ok {
+            checks.push(PreflightCheckItem {
+                name: "OpenSSH client".into(),
+                status: "PASS".into(),
+                detail: "OpenSSH client is available.".into(),
+            });
+        } else {
+            has_fail = true;
+            checks.push(PreflightCheckItem {
+                name: "OpenSSH client".into(),
+                status: "FAIL".into(),
+                detail: "OpenSSH client not found in PATH.".into(),
+            });
+        }
+
+        let plat_ok = doc
+            .pointer("/checks/platform/supported")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !plat_ok {
+            checks.push(PreflightCheckItem {
+                name: "Platform support".into(),
+                status: "WARNING".into(),
+                detail: "Current Linux/OS distribution is outside officially tested targets.".into(),
+            });
+        }
+    }
+
+    // 4. Config destination permissions check
+    if let Ok(home) = resolve_effective_home() {
+        let cfg_dir = home.join(".config/jack");
+        if cfg_dir.is_symlink() || home.join(".config").is_symlink() {
+            has_fail = true;
+            checks.push(PreflightCheckItem {
+                name: "Configuration path safety".into(),
+                status: "FAIL".into(),
+                detail: "Configuration directory cannot be a symlink.".into(),
+            });
+        } else {
+            checks.push(PreflightCheckItem {
+                name: "Configuration path safety".into(),
+                status: "PASS".into(),
+                detail: "Target configuration directory is safe.".into(),
+            });
+        }
+    }
+
+    // 5. Explicit SSH authentication honesty boundary
+    checks.push(PreflightCheckItem {
+        name: "Remote SSH authentication".into(),
+        status: "WARNING".into(),
+        detail: "SSH authentication not tested.".into(),
+    });
+
+    let has_warn = checks.iter().any(|c| c.status == "WARNING");
+    let overall = if has_fail {
+        "FAIL"
+    } else if has_warn {
+        "WARNING"
+    } else {
+        "PASS"
+    };
+
+    PreflightResult {
+        overall: overall.into(),
+        can_save: !has_fail,
+        checks,
     }
 }
 
 #[tauri::command]
 fn save_wizard_config(req: WizardSaveRequest) -> Result<SaveResult, String> {
     if !req.confirmed {
-        return Err("Se requiere confirmación explícita antes de guardar.".into());
+        return Err("Explicit confirmation is required before saving.".into());
     }
     match req.mode.as_str() {
         "workstation" => {
@@ -521,14 +717,14 @@ fn save_wizard_config(req: WizardSaveRequest) -> Result<SaveResult, String> {
                 return Err(if stderr.is_empty() { stdout } else { stderr });
             }
         }
-        _ => return Err("Modo de configuración no soportado.".into()),
+        _ => return Err("Unsupported configuration mode.".into()),
     }
 
     let devices = list_devices()?;
     Ok(SaveResult {
         saved: true,
         devices,
-        message: "Configuración guardada y verificada correctamente.".into(),
+        message: "Configuration saved successfully.".into(),
     })
 }
 
@@ -549,10 +745,10 @@ fn launch_connect(alias: String) -> Result<ConnectResult, String> {
     let target = devices
         .into_iter()
         .find(|d| d.alias == alias)
-        .ok_or_else(|| format!("El dispositivo '{}' no está configurado.", alias))?;
+        .ok_or_else(|| format!("Device '{}' is not configured.", alias))?;
     if !target.complete {
         return Err(format!(
-            "El dispositivo '{}' está incompleto; faltan usuario o dirección.",
+            "Device '{}' is incomplete; both username and host are required.",
             alias
         ));
     }
@@ -564,7 +760,7 @@ fn launch_connect(alias: String) -> Result<ConnectResult, String> {
             alias: alias.clone(),
             target_summary: format!("{}@{}", target.user, target.host),
             message: format!(
-                "Validación segura lista para 'jack connect {}' ({}@{}). Sin conexión real en modo aislado.",
+                "Dry-run validated for 'jack connect {}' ({}@{}). No live SSH session started.",
                 alias, target.user, target.host
             ),
         });
@@ -591,21 +787,88 @@ fn launch_connect(alias: String) -> Result<ConnectResult, String> {
             cmd.arg(&alias);
             apply_isolated_home(&mut cmd);
             cmd.spawn()
-                .map_err(|e| format!("No se pudo abrir la terminal '{}': {}", term, e))?;
+                .map_err(|e| format!("Failed to launch terminal '{}': {}", term, e))?;
             return Ok(ConnectResult {
                 launched: true,
                 dry_run: false,
                 alias: alias.clone(),
                 target_summary: format!("{}@{}", target.user, target.host),
-                message: format!("Sesión SSH iniciada en terminal ({}).", term),
+                message: format!("SSH session launched in terminal ({}).", term),
             });
         }
     }
 
     Err(format!(
-        "No se detectó un emulador de terminal gráfico. Ejecuta en tu terminal: jack connect {}",
+        "No graphical terminal emulator detected. Run in terminal: jack connect {}",
         alias
     ))
+}
+
+#[tauri::command]
+fn preview_reset_config() -> Result<ResetPreview, String> {
+    let home = resolve_effective_home()?;
+    let cfg_dir = home.join(".config/jack");
+    let cfg_file = cfg_dir.join("config");
+    Ok(ResetPreview {
+        config_path: cfg_file.to_string_lossy().to_string(),
+        config_exists: cfg_file.exists(),
+        backup_dir: cfg_dir.to_string_lossy().to_string(),
+        preserved_items: vec![
+            "~/.ssh keys and config".into(),
+            "~/.ssh/known_hosts".into(),
+            "Tailscale state and login".into(),
+            "Existing JACK backups".into(),
+        ],
+    })
+}
+
+#[tauri::command]
+fn reset_jack_config(confirmed: bool) -> Result<ResetResult, String> {
+    if !confirmed {
+        return Err("Explicit confirmation is required to reset JACK configuration.".into());
+    }
+    let home = resolve_effective_home()?;
+    let cfg_dir = home.join(".config/jack");
+    let cfg_file = cfg_dir.join("config");
+    let lock_dir = cfg_dir.join(".setup-lock");
+
+    if cfg_dir.is_symlink() || cfg_file.is_symlink() {
+        return Err("Refusing to reset symlinked configuration paths.".into());
+    }
+
+    let mut affected = Vec::new();
+    let mut backup_path = None;
+
+    if cfg_file.exists() {
+        if !cfg_file.is_file() {
+            return Err("Refusing to remove non-regular configuration file.".into());
+        }
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let bak = cfg_dir.join(format!("config.bak.{}", ts));
+        fs::copy(&cfg_file, &bak).map_err(|e| format!("Failed to create backup: {}", e))?;
+        let _ = fs::set_permissions(&bak, fs::Permissions::from_mode(0o600));
+        backup_path = Some(bak.to_string_lossy().to_string());
+
+        fs::remove_file(&cfg_file).map_err(|e| format!("Failed to remove config file: {}", e))?;
+        if cfg_file.exists() {
+            return Err("Verification failed: config file still exists after reset.".into());
+        }
+        affected.push(cfg_file.to_string_lossy().to_string());
+    }
+
+    if lock_dir.is_dir() && fs::remove_dir(&lock_dir).is_ok() {
+        affected.push(lock_dir.to_string_lossy().to_string());
+    }
+
+    Ok(ResetResult {
+        reset: true,
+        backup_path,
+        affected_files: affected,
+        message: "JACK configuration reset cleanly. SSH keys, known_hosts, and Tailscale were preserved.".into(),
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -619,9 +882,12 @@ pub fn run() {
             run_doctor,
             run_diagnose,
             discover_tailscale_peers,
+            run_preflight,
             save_wizard_config,
             set_default_device,
             launch_connect,
+            preview_reset_config,
+            reset_jack_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -667,20 +933,15 @@ mod tests {
     }
 
     #[test]
-    fn isolated_cli_adapter_round_trip() {
-        let dir = env::temp_dir().join(format!("jack-rust-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn isolated_cli_preflight_save_connect_and_reset_round_trip() {
+        let dir = env::temp_dir().join(format!("jack-rust-test-046-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".ssh")).unwrap();
+        fs::write(dir.join(".ssh/known_hosts"), "sentinel\n").unwrap();
         env::set_var("JACK_HOME", &dir);
         env::set_var("JACK_CONNECT_DRY_RUN", "1");
 
-        let ver = get_cli_version().unwrap();
-        assert!(ver.starts_with("jack "));
-
-        let empty = list_devices().unwrap();
-        assert!(empty.is_empty());
-
-        let saved = save_wizard_config(WizardSaveRequest {
+        let req = WizardSaveRequest {
             mode: "device".into(),
             workstation_user: None,
             workstation_host: None,
@@ -691,17 +952,47 @@ mod tests {
             device_host: Some("127.0.0.1".into()),
             set_default: true,
             confirmed: true,
-        })
-        .unwrap();
+        };
+
+        let pre = run_preflight(req.clone());
+        assert!(pre.can_save);
+        assert_eq!(pre.overall, "WARNING"); // SSH authentication not tested
+
+        let saved = save_wizard_config(req).unwrap();
         assert!(saved.saved);
         assert_eq!(saved.devices.len(), 1);
         assert_eq!(saved.devices[0].alias, "lab");
+
+        // Duplicate device preflight fails closed
+        let dup_pre = run_preflight(WizardSaveRequest {
+            mode: "device".into(),
+            workstation_user: None,
+            workstation_host: None,
+            mac_user: None,
+            mac_host: None,
+            device_alias: Some("lab".into()),
+            device_user: Some("bob".into()),
+            device_host: Some("127.0.0.2".into()),
+            set_default: false,
+            confirmed: true,
+        });
+        assert!(!dup_pre.can_save);
+        assert_eq!(dup_pre.overall, "FAIL");
 
         let conn = launch_connect("lab".into()).unwrap();
         assert!(conn.dry_run);
         assert_eq!(conn.target_summary, "alex@127.0.0.1");
 
-        let _ = std::fs::remove_dir_all(&dir);
+        // Reset requires confirmation, creates backup, removes config, preserves .ssh/known_hosts
+        assert!(reset_jack_config(false).is_err());
+        let reset = reset_jack_config(true).unwrap();
+        assert!(reset.reset);
+        assert!(reset.backup_path.is_some());
+        assert!(Path::new(&reset.backup_path.unwrap()).exists());
+        assert!(!dir.join(".config/jack/config").exists());
+        assert_eq!(fs::read_to_string(dir.join(".ssh/known_hosts")).unwrap(), "sentinel\n");
+
+        let _ = fs::remove_dir_all(&dir);
         env::remove_var("JACK_HOME");
         env::remove_var("JACK_CONNECT_DRY_RUN");
     }

@@ -1,14 +1,14 @@
 # JACK Desktop V0.1
 
-GUI de escritorio para JACK construida con **Tauri 2 + React + TypeScript**, conectada al CLI existente (`bin/jack`) mediante comandos IPC tipados y validación estricta de entradas.
+Desktop GUI for JACK built with **Tauri 2 + React + TypeScript**, connected to the existing JACK CLI (`bin/jack`) through typed IPC commands and strict input validation.
 
-## Requisitos de compilación (Linux)
+## Build Prerequisites (Linux)
 
-- Node.js 20+ y `npm`
-- Rust (`rustc` y `cargo`)
-- Dependencias de sistema de Tauri 2 (`webkit2gtk-4.1`, `gtk+-3.0`, `pkg-config`)
+- Node.js 20+ and `npm`
+- Rust (`rustc` and `cargo`)
+- Tauri 2 system libraries (`webkit2gtk-4.1`, `gtk+-3.0`, `pkg-config`)
 
-## Desarrollo y pruebas
+## Development & Tests
 
 ```bash
 cd desktop
@@ -19,16 +19,35 @@ npm test
 cd src-tauri && cargo test
 ```
 
-## Compilación de binario Linux
+## Packaging (Linux)
 
 ```bash
 cd desktop
-npx tauri build --no-bundle
-# Binario generado en: desktop/src-tauri/target/release/jack-desktop
+npx tauri build
+# Binary: desktop/src-tauri/target/release/jack-desktop
+# Bundles: desktop/src-tauri/target/release/bundle/{deb,appimage}/
 ```
 
-## Seguridad y retención
+## Security & Data Retention
 
-- Toda ejecución del CLI usa listas explícitas de argumentos (`argv`), nunca interpolación de shell.
-- Las credenciales SSH (contraseñas, llaves privadas, `known_hosts`) nunca son solicitadas ni modificadas por la interfaz.
-- La desinstalación del enlace CLI preserva tu configuración, llaves y respaldos.
+- All CLI invocations pass explicit `argv` lists with zero shell interpolation.
+- SSH credentials (passwords, private keys, tokens, `known_hosts`) are never requested, stored, or modified by JACK Desktop.
+- **Reset JACK Configuration (in Settings)** creates a `0600` timestamped backup (`config.bak.<ts>`) and removes only `$HOME/.config/jack/config` (and an empty `.setup-lock` if present), returning the app to the Welcome screen.
+
+## Uninstalling JACK Desktop
+
+Uninstalling the desktop application **preserves** your JACK CLI binary, `$HOME/.config/jack/config`, backups, `~/.ssh`, `known_hosts`, and Tailscale state by default:
+
+- **Arch / CachyOS (`.AppImage`):** Delete the `.AppImage` file and any desktop launcher entry you created.
+- **Ubuntu / Debian (`.deb`):**
+  ```bash
+  sudo apt remove jack-desktop
+  ```
+- **Windows 11 (WSL2 Ubuntu):** Uninstall the `.deb` package or delete the `.AppImage` inside your WSL2 distribution.
+
+### Optional Manual Data Removal (Separate, Never Automated)
+
+Only if you explicitly want to delete local JACK configuration after uninstalling:
+
+- Allowed JACK config directory: `$HOME/.config/jack/` (or `$JACK_HOME/` if customized)
+- **Do NOT delete** `~/.ssh/`, `~/.ssh/known_hosts`, or Tailscale state unless you intentionally manage those separately.

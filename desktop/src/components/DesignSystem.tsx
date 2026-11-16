@@ -1,6 +1,6 @@
 import React from "react";
 import logoUrl from "../assets-logo.svg";
-import { ES } from "../i18n/es";
+import { EN } from "../i18n/en";
 
 export const JackMark: React.FC<{ size?: number }> = ({ size = 22 }) => (
   <img src={logoUrl} alt="JACK" style={{ height: size, width: "auto", display: "block" }} />
@@ -10,7 +10,7 @@ export const TitleBar: React.FC<{ subtitle?: string }> = ({ subtitle }) => (
   <header className="titlebar">
     <div className="titlebar-brand">
       <JackMark size={20} />
-      <span>{ES.appTitle}</span>
+      <span>{EN.appTitle}</span>
     </div>
     {subtitle ? <span className="titlebar-meta">{subtitle}</span> : null}
   </header>
@@ -66,14 +66,16 @@ export const GearIcon: React.FC = () => (
 
 export const WizardSidebar: React.FC<{ activeStep: number }> = ({ activeStep }) => {
   const steps = [
-    ES.steps.start,
-    ES.steps.devices,
-    ES.steps.sshUser,
-    ES.steps.confirm,
-    ES.steps.done,
+    EN.steps.welcome,
+    EN.steps.environment,
+    EN.steps.device,
+    EN.steps.sshUser,
+    EN.steps.preflight,
+    EN.steps.review,
+    EN.steps.done,
   ];
   return (
-    <aside className="sidebar" aria-label="Pasos de configuración">
+    <aside className="sidebar" aria-label="Setup steps">
       {steps.map((label, idx) => {
         const num = idx + 1;
         const done = num < activeStep;

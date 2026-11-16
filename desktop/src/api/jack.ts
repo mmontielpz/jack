@@ -83,6 +83,32 @@ export interface DeviceStatusJson {
   };
 }
 
+export interface PreflightCheckItem {
+  name: string;
+  status: "PASS" | "WARNING" | "FAIL";
+  detail: string;
+}
+
+export interface PreflightResult {
+  overall: "PASS" | "WARNING" | "FAIL";
+  can_save: boolean;
+  checks: PreflightCheckItem[];
+}
+
+export interface ResetPreview {
+  config_path: string;
+  config_exists: boolean;
+  backup_dir: string;
+  preserved_items: string[];
+}
+
+export interface ResetResult {
+  reset: boolean;
+  backup_path?: string | null;
+  affected_files: string[];
+  message: string;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -109,7 +135,7 @@ export const jackApi = {
     return {
       os: "linux",
       is_wsl2: false,
-      supported_note: "Linux (Arch/CachyOS y Ubuntu): compatible.",
+      supported_note: "Linux (Arch/CachyOS and Ubuntu): supported.",
     };
   },
   async listDevices(): Promise<DeviceEntry[]> {
@@ -142,8 +168,10 @@ export const jackApi = {
     return {
       incident_classification: mockDevices.length > 0 ? "INCIDENT_NONE" : "INCIDENT_CONFIG_MISSING",
       severity: mockDevices.length > 0 ? "INFO" : "CRITICAL",
-      root_cause: mockDevices.length > 0 ? "NONE" : "Sin configuración guardada.",
-      recovery_plan: { recommended_action: mockDevices.length > 0 ? "NONE" : "Configura un dispositivo." },
+      root_cause: mockDevices.length > 0 ? "NONE" : "No saved configuration found.",
+      recovery_plan: {
+        recommended_action: mockDevices.length > 0 ? "NONE" : "Configure at least one device.",
+      },
     };
   },
   async discoverTailscalePeers(): Promise<DiscoveryResult> {
@@ -156,12 +184,70 @@ export const jackApi = {
         { id: "p2", name: "t-dev-runner", address: "100.92.220.76", os: "Linux", online: true, is_windows: false },
         { id: "p3", name: "DESKTOP-79SGUPL", address: "100.104.234.71", os: "Windows", online: true, is_windows: true },
       ],
-      message: "Dispositivos de Tailscale obtenidos (solo descubrimiento; no prueba acceso SSH).",
+      message: "Tailscale peers listed (discovery only; does not test SSH access).",
     };
+  },
+  async runPreflight(req: WizardSaveRequest): Promise<PreflightResult> {
+    if (isTauri()) return tauriInvoke<PreflightResult>("run_preflight", { req });
+    const checks: PreflightCheckItem[] = [
+      { name: "JACK CLI", status: "PASS", detail: "jack CLI binary is available." },
+      { name: "OpenSSH client", status: "PASS", detail: "ssh client is available." },
+    ];
+    let hasFail = false;
+    let hasWarn = false;
+    const validatePair = (label: string, user?: string, host?: string) => {
+      if (!user || !isValidUser(user)) {
+        hasFail = true;
+        checks.push({ name: `${label} SSH User`, status: "FAIL", detail: "Invalid SSH username." });
+      }
+      if (!host || !isValidHost(host)) {
+        hasFail = true;
+        checks.push({ name: `${label} Host`, status: "FAIL", detail: "Invalid IPv4 address or hostname." });
+      }
+    };
+    if (req.mode === "workstation" || req.mode === "both") {
+      validatePair("Workstation", req.workstation_user, req.workstation_host);
+      if (mockDevices.some((d) => d.alias === "workstation")) {
+        hasWarn = true;
+        checks.push({
+          name: "Alias conflict",
+          status: "WARNING",
+          detail: "Existing 'workstation' entry will be updated.",
+        });
+      }
+    }
+    if (req.mode === "mac" || req.mode === "both") {
+      validatePair("Mac", req.mac_user, req.mac_host);
+      if (mockDevices.some((d) => d.alias === "mac")) {
+        hasWarn = true;
+        checks.push({ name: "Alias conflict", status: "WARNING", detail: "Existing 'mac' entry will be updated." });
+      }
+    }
+    if (req.mode === "device") {
+      if (!req.device_alias || !isValidAlias(req.device_alias)) {
+        hasFail = true;
+        checks.push({ name: "Device Alias", status: "FAIL", detail: "Invalid or reserved device alias." });
+      } else if (mockDevices.some((d) => d.alias === req.device_alias)) {
+        hasWarn = true;
+        checks.push({
+          name: "Alias conflict",
+          status: "WARNING",
+          detail: `Existing '${req.device_alias}' entry will be updated.`,
+        });
+      }
+      validatePair("Device", req.device_user, req.device_host);
+    }
+    checks.push({
+      name: "SSH Authentication",
+      status: "WARNING",
+      detail: "SSH authentication not tested.",
+    });
+    const overall = hasFail ? "FAIL" : hasWarn || checks.some((c) => c.status === "WARNING") ? "WARNING" : "PASS";
+    return { overall, can_save: !hasFail, checks };
   },
   async saveWizardConfig(req: WizardSaveRequest): Promise<SaveResult> {
     if (isTauri()) return tauriInvoke<SaveResult>("save_wizard_config", { req });
-    if (!req.confirmed) throw new Error("Confirmación requerida.");
+    if (!req.confirmed) throw new Error("Explicit confirmation is required before saving.");
     if (req.mode === "workstation" || req.mode === "both") {
       mockDevices.push({
         alias: "workstation",
@@ -189,7 +275,7 @@ export const jackApi = {
         complete: true,
       });
     }
-    return { saved: true, devices: [...mockDevices], message: "Configuración guardada." };
+    return { saved: true, devices: [...mockDevices], message: "Configuration saved." };
   },
   async setDefaultDevice(alias: string): Promise<string> {
     if (isTauri()) return tauriInvoke<string>("set_default_device", { alias });
@@ -202,7 +288,31 @@ export const jackApi = {
       dry_run: true,
       alias,
       target_summary: `${alias}`,
-      message: `Validación lista para jack connect ${alias}.`,
+      message: `Validation ready for jack connect ${alias}.`,
+    };
+  },
+  async previewResetConfig(): Promise<ResetPreview> {
+    if (isTauri()) return tauriInvoke<ResetPreview>("preview_reset_config");
+    return {
+      config_path: "~/.config/jack/config",
+      config_exists: mockDevices.length > 0,
+      backup_dir: "~/.config/jack",
+      preserved_items: [
+        "~/.ssh (SSH keys & config)",
+        "~/.ssh/known_hosts",
+        "Tailscale state & daemon",
+      ],
+    };
+  },
+  async resetJackConfig(confirmed: boolean): Promise<ResetResult> {
+    if (isTauri()) return tauriInvoke<ResetResult>("reset_jack_config", { confirmed });
+    if (!confirmed) throw new Error("Explicit confirmation is required to reset configuration.");
+    mockDevices.splice(0, mockDevices.length);
+    return {
+      reset: true,
+      backup_path: "~/.config/jack/config.bak.preview",
+      affected_files: ["~/.config/jack/config"],
+      message: "JACK configuration backed up and reset.",
     };
   },
 };

@@ -1,1 +1,1 @@
-{"root":["./src/App.test.tsx","./src/App.tsx","./src/main.tsx","./src/test-setup.ts","./src/vite-env.d.ts","./src/api/jack.ts","./src/components/DesignSystem.tsx","./src/i18n/es.ts"],"version":"5.9.3"}
+{"root":["./src/App.test.tsx","./src/App.tsx","./src/main.tsx","./src/test-setup.ts","./src/vite-env.d.ts","./src/api/jack.ts","./src/components/DesignSystem.tsx","./src/i18n/en.ts"],"version":"5.9.3"}
