@@ -69,9 +69,10 @@ export const GearIcon: React.FC = () => (
 
 export const WizardSidebar: React.FC<{ activeStep: number }> = ({ activeStep }) => {
   const steps = [
-    EN.moments.chooseDevice,
-    EN.moments.connectVerify,
-    EN.moments.ready,
+    EN.stages.checkTailscale,
+    EN.stages.chooseDevice,
+    EN.stages.connectVerify,
+    EN.stages.ready,
   ];
   return (
     <aside className="sidebar" aria-label="Setup steps">

@@ -13,7 +13,7 @@ function setupBaseMocks() {
   });
 }
 
-describe("JACK Desktop Zero-Friction 3-Moment Onboarding", () => {
+describe("JACK Desktop 4-Stage Tailscale-Aware Onboarding", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
     vi.restoreAllMocks();
@@ -23,24 +23,30 @@ describe("JACK Desktop Zero-Friction 3-Moment Onboarding", () => {
     cleanup();
   });
 
-  it("auto-advances on peer selection, filters many devices, and reaches Connected / Ready to Use on verified SSH", async () => {
+  it("auto-advances healthy Tailscale to Choose Device, filters 20 devices without repeated warnings, and runs Verify Connection -> Save & Continue", async () => {
     setupBaseMocks();
     vi.spyOn(jackApi, "getTailscaleState").mockResolvedValue({
       cli_installed: true,
       running: true,
       authenticated: true,
+      service_running: true,
+      signed_in: true,
+      connected: true,
+      status_category: "CONNECTED",
       backend_state: "Running",
       tailnet_name: "lab.ts.net",
       self_name: "cachy",
+      os_family: "linux",
+      install_url: "https://tailscale.com/download/linux",
       message: "Connected",
     });
     const manyPeers = Array.from({ length: 20 }, (_, i) => ({
       id: `p${i}`,
-      name: i === 15 ? "target-gamma" : `node-${i}`,
+      name: i === 12 ? "win-lab" : `node-${i}`,
       address: `100.64.0.${10 + i}`,
-      os: i % 2 === 0 ? "Linux" : "macOS",
+      os: i === 12 ? "Windows" : "Linux",
       online: true,
-      is_windows: false,
+      is_windows: i === 12,
     }));
     vi.spyOn(jackApi, "discoverTailscalePeers").mockResolvedValue({
       available: true,
@@ -49,9 +55,17 @@ describe("JACK Desktop Zero-Friction 3-Moment Onboarding", () => {
       message: "ok",
     });
     vi.spyOn(jackApi, "runPreflight").mockImplementation(async (req) => ({
-      overall: req.device_user ? "PASS" : "FAIL",
-      can_save: Boolean(req.device_user),
-      checks: [{ name: "JACK CLI", status: req.device_user ? "PASS" : "FAIL", detail: "ok" }],
+      overall: "PASS",
+      can_save: true,
+      checks: [
+        {
+          name: "SSH username",
+          status: req.device_user ? "PASS" : "NOT_TESTED",
+          detail: req.device_user ? "Valid" : "Not entered",
+          remediation: req.device_user ? null : "Enter username below.",
+        },
+        { name: "JACK CLI", status: "PASS", detail: "Available", remediation: null },
+      ],
     }));
     vi.spyOn(jackApi, "checkNetworkReachability").mockResolvedValue({
       status: "REACHABLE",
@@ -64,95 +78,195 @@ describe("JACK Desktop Zero-Friction 3-Moment Onboarding", () => {
     });
     const saveSpy = vi.spyOn(jackApi, "saveWizardConfig").mockResolvedValue({
       saved: true,
-      devices: [{ alias: "target-gamma", user: "alice", host: "100.64.0.25", source: "device", complete: true }],
+      devices: [{ alias: "win-lab", user: "alice", host: "100.64.0.22", source: "device", complete: true }],
       message: "Saved",
     });
 
-    const { container } = render(<App />);
+    render(<App />);
 
-    // Welcome -> Moment 1 (no intermediate Tailscale screen when connected)
+    // Welcome -> Stage 1 Check Tailscale -> auto-advances to Stage 2 Choose Device
     fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
-    await screen.findByRole("heading", { name: "Choose a Device" });
+    await screen.findByText(/Tailscale is connected\. Continuing/i);
+    await screen.findByRole("heading", { name: "Choose Device" }, { timeout: 2500 });
+
+    // No repeated Windows warning in peer list; responsive list height
+    expect(screen.queryByText(/OpenSSH Server must be enabled/i)).toBeNull();
     const listEl = screen.getByRole("list", { name: "Discovered Tailscale devices" });
-    expect(listEl).toHaveStyle({ maxHeight: "260px", overflowY: "auto" });
+    expect(listEl).toHaveStyle({ maxHeight: "calc(100vh - 290px)" });
 
-    // Filter many devices
-    fireEvent.change(screen.getByLabelText("Filter devices"), { target: { value: "gamma" } });
-    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    // Filter and select Windows peer -> auto-advances to Stage 3
+    fireEvent.change(screen.getByLabelText("Filter devices"), { target: { value: "win-lab" } });
+    fireEvent.click(screen.getByText("win-lab"));
+    await screen.findByRole("heading", { name: /Connect & Verify: win-lab/i });
+    expect(screen.getByText(/Windows target selected: OpenSSH Server/i)).toBeInTheDocument();
 
-    // Clicking peer immediately advances to Moment 2 (no Continue button)
-    fireEvent.click(screen.getByText("target-gamma"));
-    await screen.findByRole("heading", { name: /Connect & Verify: target-gamma/i });
-    expect(container.querySelector(".banner-info")).toBeNull();
-
-    // Missing username keeps buttons disabled
-    const verifyBtn = screen.getByRole("button", { name: "Verify & Save" });
-    const saveUnverifiedBtn = screen.getByRole("button", { name: "Save Without Verifying" });
+    // Primary action is Verify Connection (Save & Continue not shown yet)
+    const verifyBtn = screen.getByRole("button", { name: "Verify Connection" });
     expect(verifyBtn).toBeDisabled();
-    expect(saveUnverifiedBtn).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save & Continue" })).toBeNull();
 
-    // Enter username, verify consent required
+    // Enter username -> check human-readable consent (no raw SSH flags)
     fireEvent.change(screen.getByLabelText(/SSH Username/i), { target: { value: "alice" } });
-    expect(saveUnverifiedBtn).not.toBeDisabled();
+    expect(screen.queryByText(/BatchMode/i)).toBeNull();
     expect(verifyBtn).toBeDisabled();
-
-    // Authorize and test repeated clicks (idempotent single save)
     fireEvent.click(screen.getByRole("checkbox"));
     expect(verifyBtn).not.toBeDisabled();
-    fireEvent.click(verifyBtn);
-    fireEvent.click(verifyBtn);
 
-    await screen.findByRole("heading", { name: "Connected / Ready to Use" });
+    // Changing username resets consent
+    fireEvent.change(screen.getByLabelText(/SSH Username/i), { target: { value: "alice2" } });
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    fireEvent.change(screen.getByLabelText(/SSH Username/i), { target: { value: "alice" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    // Verify Connection -> transitions primary CTA to Save & Continue (does not auto-save)
+    fireEvent.click(screen.getByRole("button", { name: "Verify Connection" }));
+    const saveContinueBtn = await screen.findByRole("button", { name: "Save & Continue" });
     expect(sshSpy).toHaveBeenCalledTimes(1);
+    expect(saveSpy).not.toHaveBeenCalled();
+
+    // Repeated clicks on Save & Continue only save once
+    fireEvent.click(saveContinueBtn);
+    fireEvent.click(saveContinueBtn);
+    await screen.findByRole("heading", { name: "Connected / Ready to Use" });
     expect(saveSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("handles Tailscale unavailable, manual host, network failure, host-key/auth failure, retry, and save failure", async () => {
+  it("handles Tailscale missing, signed out, service stopped, unknown, and Manual SSH path", async () => {
+    setupBaseMocks();
+    vi.spyOn(jackApi, "getTailscaleState")
+      .mockResolvedValueOnce({
+        cli_installed: false,
+        running: false,
+        authenticated: false,
+        service_running: false,
+        signed_in: false,
+        connected: false,
+        status_category: "NOT_INSTALLED",
+        backend_state: "NotInstalled",
+        os_family: "linux",
+        install_url: "https://tailscale.com/download/linux",
+        message: "Not installed",
+      })
+      .mockResolvedValueOnce({
+        cli_installed: true,
+        running: true,
+        authenticated: false,
+        service_running: true,
+        signed_in: false,
+        connected: false,
+        status_category: "SIGNED_OUT",
+        backend_state: "NeedsLogin",
+        os_family: "linux",
+        install_url: "https://tailscale.com/download/linux",
+        message: "Signed out",
+      })
+      .mockResolvedValueOnce({
+        cli_installed: true,
+        running: false,
+        authenticated: false,
+        service_running: false,
+        signed_in: false,
+        connected: false,
+        status_category: "SERVICE_STOPPED",
+        backend_state: "ServiceStopped",
+        os_family: "linux",
+        install_url: "https://tailscale.com/download/linux",
+        message: "Service stopped",
+      })
+      .mockResolvedValueOnce({
+        cli_installed: true,
+        running: false,
+        authenticated: false,
+        service_running: false,
+        signed_in: false,
+        connected: false,
+        status_category: "UNKNOWN",
+        backend_state: "Unknown",
+        os_family: "linux",
+        install_url: "https://tailscale.com/download/linux",
+        message: "Unknown state",
+      });
+
+    render(<App />);
+
+    // 1. Not installed -> official link
+    fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
+    await screen.findByText("Tailscale is not installed");
+    expect(screen.getByRole("link", { name: "Download Tailscale for your OS" })).toHaveAttribute(
+      "href",
+      "https://tailscale.com/download/linux",
+    );
+
+    // 2. Signed out
+    fireEvent.click(screen.getByRole("button", { name: "Retry Check" }));
+    await screen.findByText("Sign in to Tailscale");
+
+    // 3. Service stopped
+    fireEvent.click(screen.getByRole("button", { name: "Retry Check" }));
+    await screen.findByText("Tailscale service is stopped");
+
+    // 4. Unknown -> never reports Connected
+    fireEvent.click(screen.getByRole("button", { name: "Retry Check" }));
+    await screen.findByText("Tailscale is not connected");
+    expect(screen.queryByText("Connected")).toBeNull();
+
+    // 5. Manual SSH path
+    fireEvent.click(screen.getByRole("button", { name: "Use Manual SSH Instead" }));
+    await screen.findByRole("heading", { name: "Manual SSH Target" });
+  });
+
+  it("displays actionable preflight FAIL remediation, handles host-key failure, save failure, and dry-run", async () => {
     setupBaseMocks();
     vi.spyOn(jackApi, "getTailscaleState").mockResolvedValue({
       cli_installed: false,
       running: false,
       authenticated: false,
+      service_running: false,
+      signed_in: false,
+      connected: false,
+      status_category: "NOT_INSTALLED",
       backend_state: "NotInstalled",
+      os_family: "linux",
+      install_url: "https://tailscale.com/download/linux",
       message: "Not installed",
     });
-    vi.spyOn(jackApi, "runPreflight").mockImplementation(async (req) => ({
-      overall: req.device_user ? "PASS" : "FAIL",
-      can_save: Boolean(req.device_user),
-      checks: [{ name: "JACK CLI", status: req.device_user ? "PASS" : "FAIL", detail: "ok" }],
-    }));
+    const preflightSpy = vi
+      .spyOn(jackApi, "runPreflight")
+      .mockResolvedValueOnce({
+        overall: "FAIL",
+        can_save: false,
+        checks: [
+          {
+            name: "OpenSSH client",
+            status: "FAIL",
+            detail: "OpenSSH client (`ssh`) was not found in PATH.",
+            remediation: "Install OpenSSH client.",
+          },
+        ],
+      })
+      .mockResolvedValue({
+        overall: "PASS",
+        can_save: true,
+        checks: [{ name: "OpenSSH client", status: "PASS", detail: "Available", remediation: null }],
+      });
     vi.spyOn(jackApi, "checkNetworkReachability").mockResolvedValue({
-      status: "UNREACHABLE",
-      detail: "TCP port 22 did not respond.",
+      status: "NOT_TESTED",
+      detail: "Dry-run mode active.",
     });
-    const sshSpy = vi
-      .spyOn(jackApi, "testSshAuthentication")
+    vi.spyOn(jackApi, "testSshAuthentication")
       .mockResolvedValueOnce({
         status: "FAILED",
         host_key_checked: true,
         failure_category: "host_key_issue",
-        recovery_hint: "Verify the host fingerprint out-of-band and update ~/.ssh/known_hosts before retrying.",
+        recovery_hint: "Verify host fingerprint out-of-band before retrying.",
         detail: "Host key verification failed.",
       })
       .mockResolvedValueOnce({
-        status: "FAILED",
-        host_key_checked: true,
-        failure_category: "auth_rejected",
-        recovery_hint: "Ensure your public key is in ~/.ssh/authorized_keys.",
-        detail: "Permission denied (publickey).",
-      })
-      .mockResolvedValueOnce({
-        status: "VERIFIED",
-        host_key_checked: true,
-        detail: "SSH authentication succeeded.",
-      })
-      .mockResolvedValueOnce({
-        status: "VERIFIED",
-        host_key_checked: true,
-        detail: "SSH authentication succeeded.",
+        status: "NOT_TESTED",
+        host_key_checked: false,
+        detail: "Dry-run mode active: SSH authentication was not tested.",
       });
-    const saveSpy = vi
-      .spyOn(jackApi, "saveWizardConfig")
+    vi.spyOn(jackApi, "saveWizardConfig")
       .mockRejectedValueOnce(new Error("Disk write failed"))
       .mockResolvedValueOnce({
         saved: true,
@@ -163,90 +277,28 @@ describe("JACK Desktop Zero-Friction 3-Moment Onboarding", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
-    await screen.findByText(/Tailscale is not connected/i);
-
-    // Manual host entry
+    fireEvent.click(await screen.findByRole("button", { name: "Use Manual SSH Instead" }));
     fireEvent.change(screen.getByLabelText("IPv4 address or hostname"), { target: { value: "10.0.0.5" } });
     fireEvent.change(screen.getByLabelText("Device alias"), { target: { value: "manual-box" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
-    await screen.findByRole("heading", { name: /Connect & Verify: 10\.0\.0\.5/i });
-    await screen.findByText("UNREACHABLE");
-
+    // Actionable preflight FAIL shown with remediation
+    await screen.findByText("Install OpenSSH client.");
     fireEvent.change(screen.getByLabelText(/SSH Username/i), { target: { value: "bob" } });
+    await waitFor(() => expect(preflightSpy).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("checkbox"));
 
-    // 1st attempt: host-key failure
-    fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
-    await screen.findByText(/Verify the host fingerprint out-of-band/i);
+    // Host-key failure -> Retry Verification
+    fireEvent.click(screen.getByRole("button", { name: "Verify Connection" }));
+    await screen.findByText("Verify host fingerprint out-of-band before retrying.");
 
-    // 2nd attempt (retry without restarting): auth failure
-    fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
-    await screen.findByText(/Ensure your public key is in ~\/\.ssh\/authorized_keys/i);
-
-    // 3rd attempt: SSH verified, save fails -> stays on Moment 2 for retry
-    fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
-    await screen.findByText("Disk write failed");
-
-    // 4th attempt: retry succeeds -> Moment 3 Connected
-    fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
-    await screen.findByRole("heading", { name: "Connected / Ready to Use" });
-    expect(sshSpy).toHaveBeenCalledTimes(4);
-    expect(saveSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports Simulation / Not Tested honestly in dry-run mode and supports unverified save", async () => {
-    setupBaseMocks();
-    vi.spyOn(jackApi, "getTailscaleState").mockResolvedValue({
-      cli_installed: true,
-      running: true,
-      authenticated: true,
-      backend_state: "Running",
-      message: "Connected",
-    });
-    vi.spyOn(jackApi, "discoverTailscalePeers").mockResolvedValue({
-      available: true,
-      backend_state: "Running",
-      peers: [{ id: "p1", name: "sim-box", address: "100.64.0.99", os: "Linux", online: true, is_windows: false }],
-      message: "ok",
-    });
-    vi.spyOn(jackApi, "runPreflight").mockImplementation(async (req) => ({
-      overall: req.device_user ? "PASS" : "FAIL",
-      can_save: Boolean(req.device_user),
-      checks: [{ name: "JACK CLI", status: req.device_user ? "PASS" : "FAIL", detail: "ok" }],
-    }));
-    vi.spyOn(jackApi, "checkNetworkReachability").mockResolvedValue({
-      status: "NOT_TESTED",
-      detail: "Dry-run mode active.",
-    });
-    vi.spyOn(jackApi, "testSshAuthentication").mockResolvedValue({
-      status: "NOT_TESTED",
-      host_key_checked: false,
-      detail: "Dry-run mode active: SSH authentication was not tested.",
-    });
-    vi.spyOn(jackApi, "saveWizardConfig").mockResolvedValue({
-      saved: true,
-      devices: [{ alias: "sim-box", user: "carol", host: "100.64.0.99", source: "device", complete: true }],
-      message: "Saved",
-    });
-
-    render(<App />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
-    fireEvent.click(await screen.findByText("sim-box"));
-
-    await screen.findByRole("heading", { name: /Connect & Verify: sim-box/i });
-    fireEvent.change(screen.getByLabelText(/SSH Username/i), { target: { value: "carol" } });
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Verify & Save" }));
-
-    await screen.findByRole("heading", { name: "Simulation / Not Tested" });
-
-    // Retry -> Save Without Verifying -> Needs Setup
+    // Dry-run NOT_TESTED -> Save & Continue -> Save failure -> Retry -> Simulation / Not Tested
     fireEvent.click(screen.getByRole("button", { name: "Retry Verification" }));
-    await screen.findByRole("heading", { name: /Connect & Verify: sim-box/i });
-    fireEvent.click(screen.getByRole("button", { name: "Save Without Verifying" }));
-    await screen.findByRole("heading", { name: "Needs Setup" });
+    await screen.findByText(/Dry-run mode is active/i);
+    fireEvent.click(screen.getByRole("button", { name: "Save & Continue" }));
+    await screen.findByText("Disk write failed");
+    fireEvent.click(screen.getByRole("button", { name: "Save & Continue" }));
+    await screen.findByRole("heading", { name: "Simulation / Not Tested" });
   });
 
   it("keeps Dashboard frozen and handles Add Device cancellation", async () => {
@@ -264,31 +316,29 @@ describe("JACK Desktop Zero-Friction 3-Moment Onboarding", () => {
       device: { alias: "workstation", reachability: "reachable", ssh: "available" },
     });
     vi.spyOn(jackApi, "getTailscaleState").mockResolvedValue({
-      cli_installed: true,
-      running: true,
-      authenticated: true,
-      backend_state: "Running",
-      message: "Connected",
-    });
-    vi.spyOn(jackApi, "discoverTailscalePeers").mockResolvedValue({
-      available: true,
-      backend_state: "Running",
-      peers: [],
-      message: "ok",
+      cli_installed: false,
+      running: false,
+      authenticated: false,
+      service_running: false,
+      signed_in: false,
+      connected: false,
+      status_category: "NOT_INSTALLED",
+      backend_state: "NotInstalled",
+      os_family: "linux",
+      install_url: "https://tailscale.com/download/linux",
+      message: "Not installed",
     });
 
     render(<App />);
 
     await screen.findByText("My Devices");
     expect(screen.getByText("Configured")).toBeInTheDocument();
-
     fireEvent.click(screen.getByRole("button", { name: "Check Status" }));
     await screen.findByText("Online");
 
     fireEvent.click(screen.getByRole("button", { name: /\+ Add Device/i }));
-    await screen.findByRole("heading", { name: "Choose a Device" });
+    await screen.findByRole("heading", { name: "Check Tailscale" });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await screen.findByText("My Devices");
-    await waitFor(() => expect(screen.getByText("Online")).toBeInTheDocument());
   });
 });

@@ -199,8 +199,9 @@ pub struct WizardSaveRequest {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PreflightCheckItem {
     pub name: String,
-    pub status: String, // "PASS" | "WARNING" | "FAIL"
+    pub status: String, // "PASS" | "WARNING" | "FAIL" | "NOT_TESTED"
     pub detail: String,
+    pub remediation: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -247,9 +248,15 @@ pub struct TailscaleState {
     pub cli_installed: bool,
     pub running: bool,
     pub authenticated: bool,
+    pub service_running: bool,
+    pub signed_in: bool,
+    pub connected: bool,
+    pub status_category: String, // "CONNECTED" | "NOT_INSTALLED" | "SERVICE_STOPPED" | "SIGNED_OUT" | "DISCONNECTED" | "UNKNOWN"
     pub backend_state: String,
     pub tailnet_name: Option<String>,
     pub self_name: Option<String>,
+    pub os_family: String,
+    pub install_url: String,
     pub message: String,
 }
 
@@ -310,16 +317,33 @@ pub fn classify_ssh_failure(stderr: &str) -> (&'static str, &'static str) {
     }
 }
 
+fn detect_install_url_and_family() -> (String, String) {
+    if cfg!(target_os = "macos") {
+        ("macos".into(), "https://tailscale.com/download/mac".into())
+    } else if cfg!(target_os = "windows") {
+        ("windows".into(), "https://tailscale.com/download/windows".into())
+    } else {
+        ("linux".into(), "https://tailscale.com/download/linux".into())
+    }
+}
+
 pub fn parse_tailscale_state_json(raw: &str) -> TailscaleState {
+    let (os_family, install_url) = detect_install_url_and_family();
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return TailscaleState {
             cli_installed: true,
             running: false,
             authenticated: false,
+            service_running: false,
+            signed_in: false,
+            connected: false,
+            status_category: "UNKNOWN".into(),
             backend_state: "Unknown".into(),
             tailnet_name: None,
             self_name: None,
-            message: "Unable to read Tailscale status JSON.".into(),
+            os_family,
+            install_url,
+            message: "Unable to read Tailscale status output.".into(),
         };
     };
     let backend_state = v
@@ -327,8 +351,45 @@ pub fn parse_tailscale_state_json(raw: &str) -> TailscaleState {
         .and_then(|s| s.as_str())
         .unwrap_or("Unknown")
         .to_string();
-    let running = backend_state == "Running";
-    let authenticated = running;
+
+    let (service_running, signed_in, connected, status_category, message) = match backend_state.as_str() {
+        "Running" => (
+            true,
+            true,
+            true,
+            "CONNECTED",
+            "Tailscale is installed, signed in, and connected.".to_string(),
+        ),
+        "NeedsLogin" | "NeedsMachineAuth" => (
+            true,
+            false,
+            false,
+            "SIGNED_OUT",
+            "Tailscale is installed and running, but you are not signed in.".to_string(),
+        ),
+        "Stopped" => (
+            true,
+            true,
+            false,
+            "DISCONNECTED",
+            "Tailscale is installed but currently disconnected (Stopped).".to_string(),
+        ),
+        "NoState" | "Starting" => (
+            true,
+            false,
+            false,
+            "DISCONNECTED",
+            format!("Tailscale is not connected yet (state: {}).", backend_state),
+        ),
+        _ => (
+            false,
+            false,
+            false,
+            "UNKNOWN",
+            format!("Tailscale state is unknown ({}).", backend_state),
+        ),
+    };
+
     let tailnet_name = v
         .pointer("/CurrentTailnet/Name")
         .and_then(|s| s.as_str())
@@ -337,20 +398,20 @@ pub fn parse_tailscale_state_json(raw: &str) -> TailscaleState {
         .pointer("/Self/HostName")
         .and_then(|s| s.as_str())
         .map(|s| s.to_string());
-    let message = if authenticated {
-        "Tailscale is running and connected.".into()
-    } else if backend_state == "NeedsLogin" {
-        "Tailscale is installed but not signed in.".into()
-    } else {
-        format!("Tailscale state: {}.", backend_state)
-    };
+
     TailscaleState {
         cli_installed: true,
-        running,
-        authenticated,
+        running: service_running,
+        authenticated: signed_in,
+        service_running,
+        signed_in,
+        connected,
+        status_category: status_category.into(),
         backend_state,
         tailnet_name,
         self_name,
+        os_family,
+        install_url,
         message,
     }
 }
@@ -542,6 +603,7 @@ fn run_diagnose() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn get_tailscale_state() -> TailscaleState {
+    let (os_family, install_url) = detect_install_url_and_family();
     let out = Command::new("tailscale").args(["status", "--json"]).output();
     match out {
         Ok(o) if o.status.success() => {
@@ -552,20 +614,33 @@ fn get_tailscale_state() -> TailscaleState {
             let stdout = String::from_utf8_lossy(&o.stdout);
             if !stdout.trim().is_empty() {
                 let parsed = parse_tailscale_state_json(&stdout);
-                if parsed.backend_state != "Unknown" {
+                if parsed.status_category != "UNKNOWN" {
                     return parsed;
                 }
             }
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            let low = stderr.to_lowercase();
+            let stopped = low.contains("failed to connect")
+                || low.contains("tailscaled")
+                || low.contains("not running")
+                || low.contains("no such file or directory");
             TailscaleState {
                 cli_installed: true,
                 running: false,
                 authenticated: false,
-                backend_state: "Stopped".into(),
+                service_running: !stopped && false,
+                signed_in: false,
+                connected: false,
+                status_category: if stopped { "SERVICE_STOPPED" } else { "DISCONNECTED" }.into(),
+                backend_state: if stopped { "ServiceStopped" } else { "Disconnected" }.into(),
                 tailnet_name: None,
                 self_name: None,
-                message: if stderr.is_empty() {
-                    "Tailscale daemon is not running.".into()
+                os_family,
+                install_url,
+                message: if stopped {
+                    "Tailscale CLI is installed, but the tailscaled background service is not running.".into()
+                } else if stderr.is_empty() {
+                    "Tailscale is not connected.".into()
                 } else {
                     format!("Tailscale is not connected ({}).", stderr)
                 },
@@ -575,10 +650,16 @@ fn get_tailscale_state() -> TailscaleState {
             cli_installed: false,
             running: false,
             authenticated: false,
+            service_running: false,
+            signed_in: false,
+            connected: false,
+            status_category: "NOT_INSTALLED".into(),
             backend_state: "NotInstalled".into(),
             tailnet_name: None,
             self_name: None,
-            message: "Tailscale CLI was not found on this system.".into(),
+            os_family,
+            install_url,
+            message: "Tailscale is not installed on this machine.".into(),
         },
     }
 }
@@ -741,64 +822,113 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
     let mut checks = Vec::new();
     let mut has_fail = false;
 
-    // 1. Input syntax & required fields
-    let syntax_res: Result<(), String> = match req.mode.as_str() {
-        "workstation" => {
-            validate_user(req.workstation_user.as_deref().unwrap_or(""))
-                .and_then(|_| validate_host(req.workstation_host.as_deref().unwrap_or("")))
-        }
-        "mac" => {
-            validate_user(req.mac_user.as_deref().unwrap_or(""))
-                .and_then(|_| validate_host(req.mac_host.as_deref().unwrap_or("")))
-        }
-        "both" => validate_user(req.workstation_user.as_deref().unwrap_or(""))
-            .and_then(|_| validate_host(req.workstation_host.as_deref().unwrap_or("")))
-            .and_then(|_| validate_user(req.mac_user.as_deref().unwrap_or("")))
-            .and_then(|_| validate_host(req.mac_host.as_deref().unwrap_or(""))),
-        "device" => validate_device_alias(req.device_alias.as_deref().unwrap_or(""))
-            .and_then(|_| validate_user(req.device_user.as_deref().unwrap_or("")))
-            .and_then(|_| validate_host(req.device_host.as_deref().unwrap_or(""))),
-        _ => Err("Unsupported configuration mode.".into()),
-    };
-
-    match syntax_res {
-        Ok(()) => checks.push(PreflightCheckItem {
-            name: "Local input validation".into(),
-            status: "PASS".into(),
-            detail: "Alias, host address, and SSH username syntax are valid.".into(),
-        }),
-        Err(e) => {
-            has_fail = true;
-            checks.push(PreflightCheckItem {
-                name: "Local input validation".into(),
-                status: "FAIL".into(),
-                detail: e,
-            });
-        }
-    }
-
-    // 2. Existing config conflict check (duplicate alias for named devices)
+    // 1. Target alias & host validation + optional SSH username validation
     if req.mode == "device" {
-        if let Some(alias) = req.device_alias.as_deref() {
-            if let Ok(existing) = list_devices() {
-                if existing.iter().any(|d| d.alias == alias) {
+        let alias = req.device_alias.as_deref().unwrap_or("");
+        let host = req.device_host.as_deref().unwrap_or("");
+        let user = req.device_user.as_deref().unwrap_or("");
+
+        match validate_device_alias(alias).and_then(|_| validate_host(host)) {
+            Ok(()) => checks.push(PreflightCheckItem {
+                name: "Target device & host".into(),
+                status: "PASS".into(),
+                detail: format!("Alias '{}' and host '{}' are valid.", alias, host),
+                remediation: None,
+            }),
+            Err(e) => {
+                has_fail = true;
+                checks.push(PreflightCheckItem {
+                    name: "Target device & host".into(),
+                    status: "FAIL".into(),
+                    detail: e,
+                    remediation: Some("Go back to Choose Device and select a peer or enter a valid host and alias.".into()),
+                });
+            }
+        }
+
+        if user.trim().is_empty() {
+            checks.push(PreflightCheckItem {
+                name: "SSH username".into(),
+                status: "NOT_TESTED".into(),
+                detail: "SSH username has not been entered yet.".into(),
+                remediation: Some("Enter the remote SSH username below.".into()),
+            });
+        } else {
+            match validate_user(user) {
+                Ok(()) => checks.push(PreflightCheckItem {
+                    name: "SSH username".into(),
+                    status: "PASS".into(),
+                    detail: format!("Username '{}' syntax is valid.", user),
+                    remediation: None,
+                }),
+                Err(e) => {
                     has_fail = true;
                     checks.push(PreflightCheckItem {
-                        name: "Configuration conflict".into(),
+                        name: "SSH username".into(),
                         status: "FAIL".into(),
-                        detail: format!("Device alias '{}' already exists; refusing to overwrite.", alias),
+                        detail: e,
+                        remediation: Some("Use letters, numbers, '.', '-', or '_' starting with a letter or '_'.".into()),
                     });
                 }
             }
         }
+
+        if let Ok(existing) = list_devices() {
+            if existing.iter().any(|d| d.alias == alias) {
+                has_fail = true;
+                checks.push(PreflightCheckItem {
+                    name: "Alias conflict".into(),
+                    status: "FAIL".into(),
+                    detail: format!("Device alias '{}' already exists in configuration.", alias),
+                    remediation: Some("Choose a unique device alias or remove the existing entry first.".into()),
+                });
+            } else {
+                checks.push(PreflightCheckItem {
+                    name: "Alias conflict".into(),
+                    status: "PASS".into(),
+                    detail: format!("Alias '{}' is available.", alias),
+                    remediation: None,
+                });
+            }
+        }
+    } else {
+        let syntax_res: Result<(), String> = match req.mode.as_str() {
+            "workstation" => validate_user(req.workstation_user.as_deref().unwrap_or(""))
+                .and_then(|_| validate_host(req.workstation_host.as_deref().unwrap_or(""))),
+            "mac" => validate_user(req.mac_user.as_deref().unwrap_or(""))
+                .and_then(|_| validate_host(req.mac_host.as_deref().unwrap_or(""))),
+            "both" => validate_user(req.workstation_user.as_deref().unwrap_or(""))
+                .and_then(|_| validate_host(req.workstation_host.as_deref().unwrap_or("")))
+                .and_then(|_| validate_user(req.mac_user.as_deref().unwrap_or("")))
+                .and_then(|_| validate_host(req.mac_host.as_deref().unwrap_or(""))),
+            _ => Err("Unsupported configuration mode.".into()),
+        };
+        match syntax_res {
+            Ok(()) => checks.push(PreflightCheckItem {
+                name: "Target validation".into(),
+                status: "PASS".into(),
+                detail: "Target host and username syntax are valid.".into(),
+                remediation: None,
+            }),
+            Err(e) => {
+                has_fail = true;
+                checks.push(PreflightCheckItem {
+                    name: "Target validation".into(),
+                    status: "FAIL".into(),
+                    detail: e,
+                    remediation: Some("Verify host address and SSH username.".into()),
+                });
+            }
+        }
     }
 
-    // 3. JACK CLI & SSH client availability
+    // 2. JACK CLI availability
     match get_cli_version() {
         Ok(v) => checks.push(PreflightCheckItem {
             name: "JACK CLI".into(),
             status: "PASS".into(),
             detail: format!("Available ({}).", v),
+            remediation: None,
         }),
         Err(e) => {
             has_fail = true;
@@ -806,68 +936,94 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
                 name: "JACK CLI".into(),
                 status: "FAIL".into(),
                 detail: e,
+                remediation: Some("Install JACK CLI or ensure `jack` is on PATH.".into()),
             });
         }
     }
 
-    if let Ok(doc) = run_doctor() {
-        let ssh_ok = doc
-            .pointer("/checks/ssh/client_available")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if ssh_ok {
-            checks.push(PreflightCheckItem {
-                name: "OpenSSH client".into(),
-                status: "PASS".into(),
-                detail: "OpenSSH client is available.".into(),
-            });
-        } else {
-            has_fail = true;
-            checks.push(PreflightCheckItem {
-                name: "OpenSSH client".into(),
-                status: "FAIL".into(),
-                detail: "OpenSSH client not found in PATH.".into(),
-            });
-        }
+    // 3. OpenSSH client availability (independent of config existence)
+    let ssh_available = Command::new("ssh").arg("-V").output().is_ok();
+    if ssh_available {
+        checks.push(PreflightCheckItem {
+            name: "OpenSSH client".into(),
+            status: "PASS".into(),
+            detail: "OpenSSH client (`ssh`) is available.".into(),
+            remediation: None,
+        });
+    } else {
+        has_fail = true;
+        checks.push(PreflightCheckItem {
+            name: "OpenSSH client".into(),
+            status: "FAIL".into(),
+            detail: "OpenSSH client (`ssh`) was not found in PATH.".into(),
+            remediation: Some("Install OpenSSH client (`pacman -S openssh` or `apt install openssh-client`).".into()),
+        });
+    }
 
+    // 4. Optional platform advisory from jack doctor (WARNING only, non-blocking)
+    if let Ok(doc) = run_doctor() {
         let plat_ok = doc
             .pointer("/checks/platform/supported")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         if !plat_ok {
             checks.push(PreflightCheckItem {
                 name: "Platform support".into(),
                 status: "WARNING".into(),
-                detail: "Current Linux/OS distribution is outside officially tested targets.".into(),
+                detail: "Current OS distribution is outside officially tested targets.".into(),
+                remediation: Some("Tested platforms: Arch/CachyOS, Ubuntu Linux, and Windows 11 WSL2.".into()),
             });
         }
     }
 
-    // 4. Config destination permissions check
+    // 5. Config destination symlink & ownership safety
     if let Ok(home) = resolve_effective_home() {
-        let cfg_dir = home.join(".config/jack");
-        if cfg_dir.is_symlink() || home.join(".config").is_symlink() {
+        let cfg_root = home.join(".config");
+        let cfg_dir = cfg_root.join("jack");
+        if cfg_dir.is_symlink() || cfg_root.is_symlink() {
             has_fail = true;
             checks.push(PreflightCheckItem {
                 name: "Configuration path safety".into(),
                 status: "FAIL".into(),
                 detail: "Configuration directory cannot be a symlink.".into(),
+                remediation: Some("Replace ~/.config/jack symlink with a regular user-owned directory.".into()),
             });
         } else {
-            checks.push(PreflightCheckItem {
-                name: "Configuration path safety".into(),
-                status: "PASS".into(),
-                detail: "Target configuration directory is safe.".into(),
-            });
+            #[cfg(unix)]
+            let ownership_ok = {
+                use std::os::unix::fs::MetadataExt;
+                let home_uid = fs::metadata(&home).map(|m| m.uid()).ok();
+                let dir_uid = if cfg_dir.exists() {
+                    fs::metadata(&cfg_dir).map(|m| m.uid()).ok()
+                } else {
+                    home_uid
+                };
+                match (home_uid, dir_uid) {
+                    (Some(h), Some(d)) => h == d,
+                    _ => true,
+                }
+            };
+            #[cfg(not(unix))]
+            let ownership_ok = true;
+
+            if !ownership_ok {
+                has_fail = true;
+                checks.push(PreflightCheckItem {
+                    name: "Configuration path safety".into(),
+                    status: "FAIL".into(),
+                    detail: "Configuration directory is not owned by the current user.".into(),
+                    remediation: Some("Fix ownership of ~/.config/jack before saving.".into()),
+                });
+            } else {
+                checks.push(PreflightCheckItem {
+                    name: "Configuration path safety".into(),
+                    status: "PASS".into(),
+                    detail: format!("Target configuration directory ({}) is safe.", cfg_dir.display()),
+                    remediation: None,
+                });
+            }
         }
     }
-
-    // 5. Explicit SSH authentication honesty boundary
-    checks.push(PreflightCheckItem {
-        name: "Remote SSH authentication".into(),
-        status: "WARNING".into(),
-        detail: "SSH authentication not tested.".into(),
-    });
 
     let has_warn = checks.iter().any(|c| c.status == "WARNING");
     let overall = if has_fail {
@@ -1233,7 +1389,7 @@ mod tests {
 
         let pre = run_preflight(req.clone());
         assert!(pre.can_save);
-        assert_eq!(pre.overall, "WARNING"); // SSH authentication not tested
+        assert_eq!(pre.overall, "PASS");
 
         let saved = save_wizard_config(req).unwrap();
         assert!(saved.saved);
@@ -1279,11 +1435,20 @@ mod tests {
         let running = parse_tailscale_state_json(
             r#"{"BackendState":"Running","CurrentTailnet":{"Name":"tailnet.ts.net"},"Self":{"HostName":"cachy"}}"#,
         );
-        assert!(running.cli_installed && running.running && running.authenticated);
+        assert_eq!(running.status_category, "CONNECTED");
+        assert!(running.cli_installed && running.service_running && running.signed_in && running.connected);
         assert_eq!(running.tailnet_name.as_deref(), Some("tailnet.ts.net"));
 
         let needs_login = parse_tailscale_state_json(r#"{"BackendState":"NeedsLogin"}"#);
-        assert!(needs_login.cli_installed && !needs_login.authenticated);
+        assert_eq!(needs_login.status_category, "SIGNED_OUT");
+        assert!(needs_login.cli_installed && needs_login.service_running && !needs_login.signed_in);
+
+        let stopped = parse_tailscale_state_json(r#"{"BackendState":"Stopped"}"#);
+        assert_eq!(stopped.status_category, "DISCONNECTED");
+
+        let unknown = parse_tailscale_state_json("not json");
+        assert_eq!(unknown.status_category, "UNKNOWN");
+        assert!(!unknown.connected);
 
         // Consent refusal & injection rejection
         assert!(test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), false, false).is_err());

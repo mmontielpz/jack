@@ -85,8 +85,9 @@ export interface DeviceStatusJson {
 
 export interface PreflightCheckItem {
   name: string;
-  status: "PASS" | "WARNING" | "FAIL";
+  status: "PASS" | "WARNING" | "FAIL" | "NOT_TESTED";
   detail: string;
+  remediation?: string | null;
 }
 
 export interface PreflightResult {
@@ -113,9 +114,15 @@ export interface TailscaleState {
   cli_installed: boolean;
   running: boolean;
   authenticated: boolean;
+  service_running: boolean;
+  signed_in: boolean;
+  connected: boolean;
+  status_category: "CONNECTED" | "NOT_INSTALLED" | "SERVICE_STOPPED" | "SIGNED_OUT" | "DISCONNECTED" | "UNKNOWN";
   backend_state: string;
   tailnet_name?: string | null;
   self_name?: string | null;
+  os_family: string;
+  install_url: string;
   message: string;
 }
 
@@ -203,10 +210,16 @@ export const jackApi = {
       cli_installed: true,
       running: true,
       authenticated: true,
+      service_running: true,
+      signed_in: true,
+      connected: true,
+      status_category: "CONNECTED",
       backend_state: "Running",
       tailnet_name: "example.ts.net",
       self_name: "local-host",
-      message: "Tailscale is running and connected.",
+      os_family: "linux",
+      install_url: "https://tailscale.com/download/linux",
+      message: "Tailscale is installed, signed in, and connected.",
     };
   },
   async checkNetworkReachability(host: string): Promise<NetworkReachabilityResult> {
@@ -248,8 +261,20 @@ export const jackApi = {
     ];
     let hasFail = false;
     let hasWarn = false;
-    const validatePair = (label: string, user?: string, host?: string) => {
-      if (!user || !isValidUser(user)) {
+    const validatePair = (label: string, user?: string, host?: string, allowEmptyUser = false) => {
+      if (!user) {
+        if (allowEmptyUser) {
+          checks.push({
+            name: `${label} SSH User`,
+            status: "NOT_TESTED",
+            detail: "SSH username has not been entered yet.",
+            remediation: "Enter the remote SSH username below.",
+          });
+        } else {
+          hasFail = true;
+          checks.push({ name: `${label} SSH User`, status: "FAIL", detail: "Invalid SSH username." });
+        }
+      } else if (!isValidUser(user)) {
         hasFail = true;
         checks.push({ name: `${label} SSH User`, status: "FAIL", detail: "Invalid SSH username." });
       }
@@ -288,13 +313,8 @@ export const jackApi = {
           detail: `Existing '${req.device_alias}' entry will be updated.`,
         });
       }
-      validatePair("Device", req.device_user, req.device_host);
+      validatePair("Device", req.device_user, req.device_host, true);
     }
-    checks.push({
-      name: "SSH Authentication",
-      status: "WARNING",
-      detail: "SSH authentication not tested.",
-    });
     const overall = hasFail ? "FAIL" : hasWarn || checks.some((c) => c.status === "WARNING") ? "WARNING" : "PASS";
     return { overall, can_save: !hasFail, checks };
   },

@@ -33,14 +33,15 @@ import {
 import { EN } from "./i18n/en";
 
 type AppState = "ONBOARDING" | "DASHBOARD" | "DIAGNOSTICS" | "SETTINGS";
-type OnboardingMoment = "WELCOME" | "M1" | "M2" | "M3";
+type OnboardingStage = "WELCOME" | "S1" | "S2" | "S3" | "S4";
 type CompletionKind = "CONNECTED" | "SIMULATION" | "FAILED" | "NEEDS_SETUP";
 
-const MOMENT_NUM: Record<OnboardingMoment, number> = {
+const STAGE_NUM: Record<OnboardingStage, number> = {
   WELCOME: 0,
-  M1: 1,
-  M2: 2,
-  M3: 3,
+  S1: 1,
+  S2: 2,
+  S3: 3,
+  S4: 4,
 };
 
 function mapDeviceStatusBadge(
@@ -69,7 +70,7 @@ function mapDeviceStatusBadge(
 
 export function App() {
   const [appState, setAppState] = useState<AppState>("ONBOARDING");
-  const [moment, setMoment] = useState<OnboardingMoment>("WELCOME");
+  const [stage, setStage] = useState<OnboardingStage>("WELCOME");
   const [wizardOrigin, setWizardOrigin] = useState<"FIRST_RUN" | "DASHBOARD">("FIRST_RUN");
   const [diagnosticsOrigin, setDiagnosticsOrigin] = useState<"WELCOME" | "DASHBOARD">("DASHBOARD");
 
@@ -83,8 +84,13 @@ export function App() {
   const [diagnose, setDiagnose] = useState<DiagnoseJson | null>(null);
   const [diagLoading, setDiagLoading] = useState(false);
 
-  // Moment 1: Tailscale & Device Discovery
+  // Stage 1: Check Tailscale
   const [tailscaleState, setTailscaleState] = useState<TailscaleState | null>(null);
+  const [tailscaleLoading, setTailscaleLoading] = useState(false);
+  const stageSeqRef = useRef(0);
+  const autoAdvanceTimerRef = useRef<number | null>(null);
+
+  // Stage 2: Choose Device
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [peerFilter, setPeerFilter] = useState("");
@@ -93,7 +99,7 @@ export function App() {
   const [targetHost, setTargetHost] = useState("");
   const [targetAlias, setTargetAlias] = useState("");
 
-  // Moment 2: Connect & Verify
+  // Stage 3: Connect & Verify
   const [sshUser, setSshUser] = useState("");
   const [setDefault, setSetDefault] = useState(true);
   const [checksLoading, setChecksLoading] = useState(false);
@@ -105,7 +111,7 @@ export function App() {
   const checkSeqRef = useRef(0);
   const writeLockRef = useRef(false);
 
-  // Moment 3: Ready / Action Required
+  // Stage 4: Ready
   const [completionKind, setCompletionKind] = useState<CompletionKind>("NEEDS_SETUP");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -115,6 +121,15 @@ export function App() {
   const [resetPreview, setResetPreview] = useState<ResetPreview | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+
+  const clearAutoAdvance = () => {
+    if (autoAdvanceTimerRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimerRef.current);
+      autoAdvanceTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => () => clearAutoAdvance(), []);
 
   const effectiveAlias = useMemo(() => {
     const trimmed = targetAlias.trim();
@@ -127,19 +142,24 @@ export function App() {
   const buildWizardRequest = (
     hostOverride?: string,
     aliasOverride?: string,
+    userOverride?: string,
     confirmed = false,
   ): WizardSaveRequest => ({
     mode: "device",
     device_alias: aliasOverride ?? effectiveAlias,
-    device_user: sshUser.trim(),
+    device_user: (userOverride ?? sshUser).trim(),
     device_host: (hostOverride ?? targetHost).trim(),
     set_default: setDefault,
     confirmed,
   });
 
   const resetWizardDraft = () => {
+    clearAutoAdvance();
+    stageSeqRef.current += 1;
     checkSeqRef.current += 1;
     writeLockRef.current = false;
+    setTailscaleState(null);
+    setDiscovery(null);
     setPeerFilter("");
     setManualMode(false);
     setSelectedPeer(null);
@@ -161,23 +181,11 @@ export function App() {
     return list;
   };
 
-  const loadMoment1Discovery = async () => {
+  const loadDiscovery = async () => {
     setDiscoveryLoading(true);
-    setErrorMsg(null);
     try {
-      const ts = await jackApi.getTailscaleState();
-      setTailscaleState(ts);
-      if (ts.running && ts.authenticated) {
-        const disc = await jackApi.discoverTailscalePeers();
-        setDiscovery(disc);
-      } else {
-        setDiscovery({
-          available: false,
-          backend_state: ts.backend_state,
-          peers: [],
-          message: ts.message,
-        });
-      }
+      const res = await jackApi.discoverTailscalePeers();
+      setDiscovery(res);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -185,25 +193,56 @@ export function App() {
     }
   };
 
-  const runMoment2Checks = async (hostToCheck: string, aliasToCheck: string, userToCheck: string) => {
+  const checkTailscaleAndMaybeAdvance = async (allowAutoAdvance = true) => {
+    clearAutoAdvance();
+    const seq = ++stageSeqRef.current;
+    setTailscaleLoading(true);
+    setErrorMsg(null);
+    try {
+      const ts = await jackApi.getTailscaleState();
+      if (seq !== stageSeqRef.current) return;
+      setTailscaleState(ts);
+      if (ts.status_category === "CONNECTED" && allowAutoAdvance) {
+        void loadDiscovery();
+        autoAdvanceTimerRef.current = window.setTimeout(() => {
+          if (seq !== stageSeqRef.current) return;
+          setManualMode(false);
+          setStage("S2");
+        }, 350);
+      }
+    } catch (err) {
+      if (seq !== stageSeqRef.current) return;
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (seq === stageSeqRef.current) {
+        setTailscaleLoading(false);
+      }
+    }
+  };
+
+  const runStage3PreflightOnly = async (hostToCheck: string, aliasToCheck: string, userToCheck: string) => {
+    const seq = ++checkSeqRef.current;
+    try {
+      const preRes = await jackApi.runPreflight(
+        buildWizardRequest(hostToCheck, aliasToCheck, userToCheck, false),
+      );
+      if (seq !== checkSeqRef.current) return;
+      setPreflight(preRes);
+    } catch (err) {
+      if (seq !== checkSeqRef.current) return;
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const runStage3InitialChecks = async (hostToCheck: string, aliasToCheck: string, userToCheck: string) => {
     const seq = ++checkSeqRef.current;
     setChecksLoading(true);
     setPreflight(null);
     setNetworkResult(null);
     setErrorMsg(null);
     try {
-      const req: WizardSaveRequest = {
-        mode: "device",
-        device_alias: aliasToCheck,
-        // Use a valid placeholder for structural preflight until the user enters sshUser;
-        // actual username is validated via isUsernameValid and re-checked in runPreflight on submit.
-        device_user: userToCheck || "pending_user",
-        device_host: hostToCheck,
-        set_default: setDefault,
-        confirmed: false,
-      };
       const [preRes, netRes] = await Promise.all([
-        jackApi.runPreflight(req),
+        jackApi.runPreflight(buildWizardRequest(hostToCheck, aliasToCheck, userToCheck, false)),
         isValidHost(hostToCheck)
           ? jackApi.checkNetworkReachability(hostToCheck)
           : Promise.resolve<NetworkReachabilityResult>({
@@ -274,24 +313,33 @@ export function App() {
           void loadSettingsData();
         } else if (stepParam === "01" || stepParam === "welcome") {
           setAppState("ONBOARDING");
-          setMoment("WELCOME");
-        } else if (stepParam === "m1") {
+          setStage("WELCOME");
+        } else if (stepParam === "s1") {
           setAppState("ONBOARDING");
-          setMoment("M1");
-          void loadMoment1Discovery();
-        } else if (stepParam === "m2") {
+          setStage("S1");
+          void checkTailscaleAndMaybeAdvance(false);
+        } else if (stepParam === "s2") {
           setAppState("ONBOARDING");
-          setMoment("M2");
-          void runMoment2Checks("100.64.0.10", "demo-device", "");
-        } else if (stepParam === "m3") {
+          setStage("S2");
+          void loadDiscovery();
+        } else if (stepParam === "s3") {
           setAppState("ONBOARDING");
-          setMoment("M3");
+          setStage("S3");
+          setTargetHost("100.64.0.10");
+          setTargetAlias("demo-device");
+          void runStage3InitialChecks("100.64.0.10", "demo-device", "");
+        } else if (stepParam === "s4") {
+          setAppState("ONBOARDING");
+          setStage("S4");
+          setTargetHost("100.64.0.10");
+          setTargetAlias("demo-device");
+          setSshUser("alice");
           setCompletionKind("CONNECTED");
         } else if (list.length > 0) {
           setAppState("DASHBOARD");
         } else {
           setAppState("ONBOARDING");
-          setMoment("WELCOME");
+          setStage("WELCOME");
         }
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -322,25 +370,26 @@ export function App() {
   const startFirstRunSetup = () => {
     resetWizardDraft();
     setWizardOrigin("FIRST_RUN");
-    setMoment("M1");
+    setStage("S1");
     setAppState("ONBOARDING");
-    void loadMoment1Discovery();
+    void checkTailscaleAndMaybeAdvance(true);
   };
 
   const startAddDeviceFromDashboard = () => {
     resetWizardDraft();
     setWizardOrigin("DASHBOARD");
-    setMoment("M1");
+    setStage("S1");
     setAppState("ONBOARDING");
-    void loadMoment1Discovery();
+    void checkTailscaleAndMaybeAdvance(true);
   };
 
-  const enterMoment2 = (host: string, alias: string) => {
+  const enterStage3 = (host: string, alias: string) => {
+    clearAutoAdvance();
     setSshConsent(false);
     setSshAuthResult(null);
     setErrorMsg(null);
-    setMoment("M2");
-    void runMoment2Checks(host, alias, sshUser.trim());
+    setStage("S3");
+    void runStage3InitialChecks(host, alias, sshUser.trim());
   };
 
   const handleSelectPeerAndAdvance = (peer: TailscalePeer) => {
@@ -350,7 +399,7 @@ export function App() {
     setTargetHost(host);
     setTargetAlias(alias);
     setManualMode(false);
-    enterMoment2(host, alias);
+    enterStage3(host, alias);
   };
 
   const handleManualContinue = () => {
@@ -363,16 +412,26 @@ export function App() {
       return;
     }
     setSelectedPeer(null);
-    enterMoment2(targetHost.trim(), effectiveAlias);
+    enterStage3(targetHost.trim(), effectiveAlias);
+  };
+
+  const handleUsernameChange = (nextUser: string) => {
+    setSshUser(nextUser);
+    setSshConsent(false);
+    setSshAuthResult(null);
+    setErrorMsg(null);
+    void runStage3PreflightOnly(targetHost.trim(), effectiveAlias, nextUser.trim());
   };
 
   const persistDevice = async (): Promise<boolean> => {
-    const res = await jackApi.saveWizardConfig(buildWizardRequest(undefined, undefined, true));
+    const res = await jackApi.saveWizardConfig(
+      buildWizardRequest(undefined, undefined, undefined, true),
+    );
     setDevices(res.devices);
     return res.saved;
   };
 
-  const handleVerifyAndSave = async () => {
+  const handleVerifyConnection = async () => {
     if (writeLockRef.current || busyAction !== null) return;
     if (!isUsernameValid) {
       setErrorMsg(EN.errors.invalidUser);
@@ -384,8 +443,9 @@ export function App() {
     setBusyAction("verify");
     setErrorMsg(null);
     try {
-      // Re-run preflight with actual username before saving
-      const pre = await jackApi.runPreflight(buildWizardRequest(undefined, undefined, false));
+      const pre = await jackApi.runPreflight(
+        buildWizardRequest(undefined, undefined, undefined, false),
+      );
       setPreflight(pre);
       if (!pre.can_save) {
         setErrorMsg(EN.errors.preflightBlocked);
@@ -399,16 +459,7 @@ export function App() {
       );
       setSshAuthResult(authRes);
 
-      if (authRes.status === "VERIFIED") {
-        await persistDevice();
-        setCompletionKind("CONNECTED");
-        setMoment("M3");
-      } else if (authRes.status === "NOT_TESTED") {
-        await persistDevice();
-        setCompletionKind("SIMULATION");
-        setMoment("M3");
-      } else {
-        // FAILED: stay on Moment 2 with classified recovery guidance & retry
+      if (authRes.status === "FAILED") {
         setErrorMsg(authRes.detail);
       }
     } catch (err) {
@@ -419,7 +470,7 @@ export function App() {
     }
   };
 
-  const handleSaveUnverified = async () => {
+  const handleSaveAndContinue = async (mode: "verified" | "simulation" | "unverified") => {
     if (writeLockRef.current || busyAction !== null) return;
     if (!isUsernameValid) {
       setErrorMsg(EN.errors.invalidUser);
@@ -430,15 +481,23 @@ export function App() {
     setBusyAction("save");
     setErrorMsg(null);
     try {
-      const pre = await jackApi.runPreflight(buildWizardRequest(undefined, undefined, false));
+      const pre = await jackApi.runPreflight(
+        buildWizardRequest(undefined, undefined, undefined, false),
+      );
       setPreflight(pre);
       if (!pre.can_save) {
         setErrorMsg(EN.errors.preflightBlocked);
         return;
       }
       await persistDevice();
-      setCompletionKind(sshAuthResult?.status === "FAILED" ? "FAILED" : "NEEDS_SETUP");
-      setMoment("M3");
+      if (mode === "verified") {
+        setCompletionKind("CONNECTED");
+      } else if (mode === "simulation") {
+        setCompletionKind("SIMULATION");
+      } else {
+        setCompletionKind(sshAuthResult?.status === "FAILED" ? "FAILED" : "NEEDS_SETUP");
+      }
+      setStage("S4");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -494,7 +553,7 @@ export function App() {
       resetWizardDraft();
       setActionMsg(res.message);
       setWizardOrigin("FIRST_RUN");
-      setMoment("WELCOME");
+      setStage("WELCOME");
       setAppState("ONBOARDING");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -504,7 +563,7 @@ export function App() {
   };
 
   // 1. ONBOARDING: Welcome
-  if (appState === "ONBOARDING" && moment === "WELCOME") {
+  if (appState === "ONBOARDING" && stage === "WELCOME") {
     return (
       <div className="app-shell">
         <TitleBar subtitle={cliVersion || undefined} showBrandText={false} />
@@ -544,43 +603,216 @@ export function App() {
     );
   }
 
-  // 2. ONBOARDING: 3-Moment Adaptive Experience (M1 -> M2 -> M3)
+  // 2. ONBOARDING: 4-Stage Adaptive Flow (S1 -> S2 -> S3 -> S4)
   if (appState === "ONBOARDING") {
-    const tsUnavailable =
-      tailscaleState !== null && (!tailscaleState.running || !tailscaleState.authenticated);
     const showManualFields =
       manualMode || (!discoveryLoading && (discovery?.peers.length ?? 0) === 0);
+    const isVerified = sshAuthResult?.status === "VERIFIED";
+    const isDryRunNotTested = sshAuthResult?.status === "NOT_TESTED";
 
     return (
       <div className="app-shell">
         <TitleBar subtitle={cliVersion || undefined} showBrandText={false} />
         <div className="split-layout">
-          <WizardSidebar activeStep={MOMENT_NUM[moment]} />
+          <WizardSidebar activeStep={STAGE_NUM[stage]} />
           <main className="main-pane" style={{ display: "flex", flexDirection: "column" }}>
             {errorMsg ? <div className="banner-error">{errorMsg}</div> : null}
 
-            {moment === "M1" && (
+            {stage === "S1" && (
+              <>
+                <h2 className="pane-title">{EN.stage1.title}</h2>
+                <p className="pane-subtitle">{EN.stage1.subtitle}</p>
+
+                {tailscaleLoading || !tailscaleState ? (
+                  <p className="pane-subtitle">{EN.stage1.checking}</p>
+                ) : (
+                  <>
+                    <div className="card-box" style={{ marginBottom: 14 }}>
+                      <div className="review-row">
+                        <span>{EN.stage1.installedLabel}</span>
+                        <StatusBadge
+                          kind={tailscaleState.cli_installed ? "ready" : "error"}
+                          label={
+                            tailscaleState.cli_installed
+                              ? EN.stage1.installed
+                              : EN.stage1.notInstalled
+                          }
+                        />
+                      </div>
+                      <div className="review-row">
+                        <span>{EN.stage1.serviceLabel}</span>
+                        <StatusBadge
+                          kind={
+                            tailscaleState.status_category === "UNKNOWN"
+                              ? "configured"
+                              : tailscaleState.service_running
+                                ? "ready"
+                                : "warn"
+                          }
+                          label={
+                            tailscaleState.status_category === "UNKNOWN"
+                              ? EN.stage1.unknown
+                              : tailscaleState.service_running
+                                ? EN.stage1.running
+                                : EN.stage1.stopped
+                          }
+                        />
+                      </div>
+                      <div className="review-row">
+                        <span>{EN.stage1.signInLabel}</span>
+                        <StatusBadge
+                          kind={
+                            tailscaleState.status_category === "UNKNOWN" || !tailscaleState.cli_installed
+                              ? "configured"
+                              : tailscaleState.signed_in
+                                ? "ready"
+                                : "warn"
+                          }
+                          label={
+                            tailscaleState.status_category === "UNKNOWN" || !tailscaleState.cli_installed
+                              ? EN.stage1.unknown
+                              : tailscaleState.signed_in
+                                ? EN.stage1.signedIn
+                                : EN.stage1.signedOut
+                          }
+                        />
+                      </div>
+                      <div className="review-row">
+                        <span>{EN.stage1.connectionLabel}</span>
+                        <StatusBadge
+                          kind={
+                            tailscaleState.connected
+                              ? "ready"
+                              : tailscaleState.status_category === "UNKNOWN"
+                                ? "configured"
+                                : "warn"
+                          }
+                          label={
+                            tailscaleState.connected
+                              ? EN.stage1.connected
+                              : tailscaleState.status_category === "UNKNOWN"
+                                ? EN.stage1.unknown
+                                : EN.stage1.disconnected
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    {tailscaleState.status_category === "CONNECTED" ? (
+                      <div className="banner-success">{EN.stage1.healthyNote}</div>
+                    ) : tailscaleState.status_category === "NOT_INSTALLED" ? (
+                      <div className="banner-warn">
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                          {EN.stage1.notInstalledTitle}
+                        </div>
+                        <div style={{ marginBottom: 8 }}>{EN.stage1.notInstalledBody}</div>
+                        <a
+                          href={tailscaleState.install_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "var(--brand-primary)", fontWeight: 600 }}
+                        >
+                          {EN.stage1.installLinkLabel}
+                        </a>
+                      </div>
+                    ) : tailscaleState.status_category === "SIGNED_OUT" ? (
+                      <div className="banner-warn">
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                          {EN.stage1.signedOutTitle}
+                        </div>
+                        <div>{EN.stage1.signedOutBody}</div>
+                      </div>
+                    ) : tailscaleState.status_category === "SERVICE_STOPPED" ? (
+                      <div className="banner-warn">
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                          {EN.stage1.serviceStoppedTitle}
+                        </div>
+                        <div>{EN.stage1.serviceStoppedBodyArchUbuntu}</div>
+                      </div>
+                    ) : (
+                      <div className="banner-warn">
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                          {EN.stage1.disconnectedTitle}
+                        </div>
+                        <div>{tailscaleState.message}</div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <div className="footer-actions" style={{ marginTop: "auto" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      clearAutoAdvance();
+                      stageSeqRef.current += 1;
+                      setErrorMsg(null);
+                      if (wizardOrigin === "DASHBOARD") {
+                        setAppState("DASHBOARD");
+                      } else {
+                        setStage("WELCOME");
+                      }
+                    }}
+                  >
+                    {wizardOrigin === "DASHBOARD" ? EN.stage2.cancel : EN.stage1.back}
+                  </button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setManualMode(true);
+                        setDiscovery({
+                          available: false,
+                          backend_state: tailscaleState?.backend_state ?? "Manual",
+                          peers: [],
+                          message: "Manual SSH target",
+                        });
+                        setStage("S2");
+                      }}
+                    >
+                      {EN.stage1.manualSshCta}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void checkTailscaleAndMaybeAdvance(true)}
+                      disabled={tailscaleLoading}
+                    >
+                      {EN.stage1.retryCheck}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {stage === "S2" && (
               <>
                 <h2 className="pane-title">
-                  {manualMode ? EN.moment1.manualTitle : EN.moment1.title}
+                  {manualMode ? EN.stage2.manualTitle : EN.stage2.title}
                 </h2>
                 <p className="pane-subtitle">
-                  {manualMode ? EN.moment1.manualSubtitle : EN.moment1.subtitle}
+                  {manualMode ? EN.stage2.manualSubtitle : EN.stage2.subtitle}
                 </p>
 
-                {tsUnavailable && !manualMode ? (
-                  <div className="banner-warn">{EN.moment1.tailscaleUnavailable}</div>
-                ) : null}
-
-                <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    marginBottom: 12,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
                   {!manualMode ? (
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      onClick={() => void loadMoment1Discovery()}
+                      onClick={() => void loadDiscovery()}
                       disabled={discoveryLoading}
                     >
-                      {EN.moment1.refresh}
+                      {EN.stage2.refresh}
                     </button>
                   ) : null}
                   <button
@@ -591,7 +823,7 @@ export function App() {
                       setErrorMsg(null);
                     }}
                   >
-                    {manualMode ? EN.moment1.usePeersToggle : EN.moment1.manualToggle}
+                    {manualMode ? EN.stage2.usePeersToggle : EN.stage2.manualToggle}
                   </button>
                   {!manualMode && (discovery?.peers.length ?? 0) > 0 ? (
                     <input
@@ -600,20 +832,25 @@ export function App() {
                       style={{ flex: 1, minWidth: 180 }}
                       value={peerFilter}
                       onChange={(e) => setPeerFilter(e.target.value)}
-                      placeholder={EN.moment1.filterPlaceholder}
+                      placeholder={EN.stage2.filterPlaceholder}
                     />
                   ) : null}
                 </div>
 
                 {!manualMode && (
                   discoveryLoading ? (
-                    <p className="pane-subtitle">{EN.moment1.loading}</p>
+                    <p className="pane-subtitle">{EN.stage2.loading}</p>
                   ) : filteredPeers.length > 0 ? (
                     <div
                       className="peer-list"
                       role="list"
                       aria-label="Discovered Tailscale devices"
-                      style={{ maxHeight: 260, overflowY: "auto", paddingRight: 4 }}
+                      style={{
+                        maxHeight: "calc(100vh - 290px)",
+                        minHeight: 140,
+                        overflowY: "auto",
+                        paddingRight: 4,
+                      }}
                     >
                       {filteredPeers.map((peer) => (
                         <div key={peer.id} role="listitem">
@@ -629,20 +866,19 @@ export function App() {
                                 <div style={{ fontWeight: 600 }}>{peer.name}</div>
                                 <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                                   {peer.os || "Unknown OS"} · {peer.address}
-                                  {peer.is_windows ? ` · ${EN.moment1.windowsNote}` : ""}
                                 </div>
                               </div>
                             </div>
                             <StatusBadge
                               kind={peer.online ? "ready" : "warn"}
-                              label={peer.online ? EN.moment1.networkOnline : EN.moment1.networkOffline}
+                              label={peer.online ? EN.stage2.networkOnline : EN.stage2.networkOffline}
                             />
                           </button>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="pane-subtitle">{EN.moment1.empty}</p>
+                    <p className="pane-subtitle">{EN.stage2.empty}</p>
                   )
                 )}
 
@@ -650,7 +886,7 @@ export function App() {
                   <div style={{ marginTop: 6 }}>
                     <div className="field-group">
                       <label className="field-label" htmlFor="target-host-input">
-                        {EN.moment1.hostLabel}
+                        {EN.stage2.hostLabel}
                       </label>
                       <input
                         id="target-host-input"
@@ -660,19 +896,19 @@ export function App() {
                           setSelectedPeer(null);
                           setTargetHost(e.target.value);
                         }}
-                        placeholder={EN.moment1.hostPlaceholder}
+                        placeholder={EN.stage2.hostPlaceholder}
                       />
                     </div>
                     <div className="field-group">
                       <label className="field-label" htmlFor="target-alias-input">
-                        {EN.moment1.aliasLabel}
+                        {EN.stage2.aliasLabel}
                       </label>
                       <input
                         id="target-alias-input"
                         className="text-input"
                         value={targetAlias}
                         onChange={(e) => setTargetAlias(e.target.value)}
-                        placeholder={EN.moment1.aliasPlaceholder}
+                        placeholder={EN.stage2.aliasPlaceholder}
                       />
                     </div>
                   </div>
@@ -684,14 +920,15 @@ export function App() {
                     className="btn btn-secondary"
                     onClick={() => {
                       setErrorMsg(null);
-                      if (wizardOrigin === "DASHBOARD") {
+                      if (wizardOrigin === "DASHBOARD" && manualMode) {
                         setAppState("DASHBOARD");
                       } else {
-                        setMoment("WELCOME");
+                        setStage("S1");
+                        void checkTailscaleAndMaybeAdvance(false);
                       }
                     }}
                   >
-                    {wizardOrigin === "DASHBOARD" ? EN.moment1.cancel : EN.moment1.back}
+                    {wizardOrigin === "DASHBOARD" ? EN.stage2.cancel : EN.stage2.back}
                   </button>
                   {showManualFields ? (
                     <button
@@ -700,51 +937,85 @@ export function App() {
                       onClick={handleManualContinue}
                       disabled={!isManualValid}
                     >
-                      {EN.moment1.continueManual}
+                      {EN.stage2.continueManual}
                     </button>
                   ) : null}
                 </div>
               </>
             )}
 
-            {moment === "M2" && (
+            {stage === "S3" && (
               <>
                 <h2 className="pane-title">
-                  {EN.moment2.title}: {selectedPeer?.name || targetHost.trim()}
+                  {EN.stage3.title}: {selectedPeer?.name || targetHost.trim()}
                 </h2>
-                <p className="pane-subtitle">{EN.moment2.subtitle}</p>
+                <p className="pane-subtitle">{EN.stage3.subtitle}</p>
 
                 {selectedPeer && !selectedPeer.online ? (
-                  <div className="banner-warn">{EN.moment1.offlineNote}</div>
+                  <div className="banner-warn">{EN.stage2.offlineNote}</div>
                 ) : null}
                 {selectedPeer?.is_windows ? (
-                  <div className="banner-warn">{EN.moment1.windowsNote}</div>
+                  <div className="banner-warn">{EN.stage2.windowsNote}</div>
                 ) : null}
 
-                {/* Progressive Automated Checks */}
-                <div className="card-box" style={{ marginBottom: 14 }}>
-                  <div className="review-row">
-                    <span>{EN.moment2.preflightLabel}</span>
-                    {checksLoading || !preflight ? (
-                      <StatusBadge kind="configured" label={EN.moment2.checking} />
-                    ) : (
-                      <StatusBadge
-                        kind={preflight.can_save ? "ready" : "error"}
-                        label={preflight.overall}
-                      />
-                    )}
-                  </div>
+                {/* Granular Preflight + Network + SSH Auth Status */}
+                <div
+                  className="card-box"
+                  style={{ marginBottom: 10, padding: "12px 16px", maxHeight: 220, overflowY: "auto" }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>{EN.stage3.preflightTitle}</div>
+                  {checksLoading || !preflight ? (
+                    <div className="review-row">
+                      <span>{EN.stage3.preflightTitle}</span>
+                      <StatusBadge kind="configured" label={EN.stage3.checking} />
+                    </div>
+                  ) : (
+                    preflight.checks.map((item) => {
+                      const kind: BadgeKind =
+                        item.status === "PASS"
+                          ? "ready"
+                          : item.status === "FAIL"
+                            ? "error"
+                            : item.status === "WARNING"
+                              ? "warn"
+                              : "configured";
+                      return (
+                        <div key={item.name} className="review-row">
+                          <div>
+                            <div style={{ fontWeight: 600 }}>{item.name}</div>
+                            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                              {item.detail}
+                            </div>
+                            {item.remediation && item.status !== "PASS" ? (
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color:
+                                    item.status === "FAIL"
+                                      ? "var(--status-error)"
+                                      : "var(--text-secondary)",
+                                  marginTop: 2,
+                                }}
+                              >
+                                {item.remediation}
+                              </div>
+                            ) : null}
+                          </div>
+                          <StatusBadge kind={kind} label={item.status} />
+                        </div>
+                      );
+                    })
+                  )}
+
                   <div className="review-row">
                     <div>
-                      <div>{EN.moment2.networkLabel}</div>
-                      {networkResult ? (
-                        <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                          {networkResult.detail}
-                        </div>
-                      ) : null}
+                      <div style={{ fontWeight: 600 }}>{EN.stage3.networkTitle}</div>
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                        {networkResult ? networkResult.detail : EN.stage3.checking}
+                      </div>
                     </div>
                     {checksLoading || !networkResult ? (
-                      <StatusBadge kind="configured" label={EN.moment2.checking} />
+                      <StatusBadge kind="configured" label={EN.stage3.checking} />
                     ) : (
                       <StatusBadge
                         kind={
@@ -758,14 +1029,15 @@ export function App() {
                       />
                     )}
                   </div>
+
                   <div className="review-row">
                     <div>
-                      <div>{EN.moment2.sshLabel}</div>
+                      <div style={{ fontWeight: 600 }}>{EN.stage3.sshTitle}</div>
                       <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                        {sshAuthResult ? sshAuthResult.detail : EN.moment2.notTested}
+                        {sshAuthResult ? sshAuthResult.detail : EN.stage3.notTested}
                       </div>
                       {sshAuthResult?.status === "FAILED" && sshAuthResult.recovery_hint ? (
-                        <div style={{ fontSize: 12, color: "var(--status-error)", marginTop: 4 }}>
+                        <div style={{ fontSize: 12, color: "var(--status-error)", marginTop: 2 }}>
                           {sshAuthResult.recovery_hint}
                         </div>
                       ) : null}
@@ -780,46 +1052,44 @@ export function App() {
                       }
                       label={
                         sshAuthResult?.status === "VERIFIED"
-                          ? EN.moment2.verified
+                          ? EN.stage3.verified
                           : sshAuthResult?.status === "FAILED"
-                            ? EN.moment2.failed
-                            : EN.moment2.notTested
+                            ? EN.stage3.failed
+                            : EN.stage3.notTested
                       }
                     />
                   </div>
                 </div>
 
-                {/* Required SSH Username (never inferred from local user) */}
+                {isDryRunNotTested ? (
+                  <div className="banner-warn">{EN.stage3.dryRunNotice}</div>
+                ) : null}
+
                 <div className="field-group">
                   <label className="field-label" htmlFor="ssh-user-input">
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                       <UserIcon />
-                      {EN.moment2.usernameLabel}
+                      {EN.stage3.usernameLabel}
                     </span>
                   </label>
                   <input
                     id="ssh-user-input"
                     className="text-input"
                     value={sshUser}
-                    onChange={(e) => {
-                      setSshUser(e.target.value);
-                      setSshConsent(false);
-                      setSshAuthResult(null);
-                    }}
-                    placeholder={EN.moment2.usernamePlaceholder}
+                    onChange={(e) => handleUsernameChange(e.target.value)}
+                    placeholder={EN.stage3.usernamePlaceholder}
                   />
                   <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "6px 0 0" }}>
-                    {EN.moment2.usernameHint}
+                    {EN.stage3.usernameHint}
                   </p>
                 </div>
 
-                {/* Explicit Per-Operation Authorization */}
                 <label
                   style={{
                     display: "flex",
                     alignItems: "flex-start",
                     gap: 8,
-                    marginBottom: 12,
+                    marginBottom: 10,
                     fontSize: 13,
                   }}
                 >
@@ -830,84 +1100,107 @@ export function App() {
                     disabled={!isUsernameValid || busyAction !== null}
                   />
                   <span>
-                    {EN.moment2.consentPrefix}{" "}
+                    {EN.stage3.consentPrefix}{" "}
                     <strong>
                       {sshUser.trim() || "<user>"}@{targetHost.trim()}
-                    </strong>
-                    .
+                    </strong>{" "}
+                    {EN.stage3.consentSuffix}
                   </span>
                 </label>
 
-                <div className="footer-actions" style={{ marginTop: "auto" }}>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => {
-                        setErrorMsg(null);
-                        setMoment("M1");
-                      }}
-                      disabled={busyAction !== null}
-                    >
-                      {EN.moment2.back}
-                    </button>
+                <details style={{ fontSize: 13, marginBottom: 10 }}>
+                  <summary style={{ cursor: "pointer", color: "var(--text-secondary)" }}>
+                    {EN.stage3.advancedSummary}
+                  </summary>
+                  <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>{EN.stage3.advancedNote}</span>
                     <button
                       type="button"
                       className="btn btn-secondary"
                       onClick={() =>
-                        void runMoment2Checks(targetHost.trim(), effectiveAlias, sshUser.trim())
+                        void handleSaveAndContinue(isDryRunNotTested ? "simulation" : "unverified")
                       }
-                      disabled={checksLoading || busyAction !== null}
-                    >
-                      {EN.moment2.recheck}
-                    </button>
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => void handleSaveUnverified()}
                       disabled={!isUsernameValid || !preflight?.can_save || busyAction !== null}
                     >
-                      {busyAction === "save" ? EN.moment2.saving : EN.moment2.saveUnverified}
+                      {busyAction === "save" ? EN.stage3.saving : EN.stage3.saveUnverified}
                     </button>
+                  </div>
+                </details>
+
+                <div className="footer-actions" style={{ marginTop: "auto" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setErrorMsg(null);
+                      setStage("S2");
+                    }}
+                    disabled={busyAction !== null}
+                  >
+                    {EN.stage3.back}
+                  </button>
+
+                  {isVerified ? (
                     <button
                       type="button"
                       className="btn btn-primary"
-                      onClick={() => void handleVerifyAndSave()}
+                      onClick={() => void handleSaveAndContinue("verified")}
+                      disabled={!isUsernameValid || !preflight?.can_save || busyAction !== null}
+                    >
+                      {busyAction === "save" ? EN.stage3.saving : EN.stage3.saveAndContinue}
+                    </button>
+                  ) : isDryRunNotTested ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void handleSaveAndContinue("simulation")}
+                      disabled={!isUsernameValid || !preflight?.can_save || busyAction !== null}
+                    >
+                      {busyAction === "save" ? EN.stage3.saving : EN.stage3.saveAndContinue}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void handleVerifyConnection()}
                       disabled={
                         !isUsernameValid ||
                         !sshConsent ||
                         !preflight?.can_save ||
+                        checksLoading ||
                         busyAction !== null
                       }
                     >
-                      {busyAction === "verify" ? EN.moment2.verifying : EN.moment2.verifyAndSave}
+                      {busyAction === "verify"
+                        ? EN.stage3.verifying
+                        : sshAuthResult?.status === "FAILED"
+                          ? EN.stage3.retryVerify
+                          : EN.stage3.verifyConnection}
                     </button>
-                  </div>
+                  )}
                 </div>
               </>
             )}
 
-            {moment === "M3" && (
+            {stage === "S4" && (
               <>
                 <h2 className="pane-title">
                   {completionKind === "CONNECTED"
-                    ? EN.moment3.titleConnected
+                    ? EN.stage4.titleConnected
                     : completionKind === "SIMULATION"
-                      ? EN.moment3.titleSimulation
+                      ? EN.stage4.titleSimulation
                       : completionKind === "FAILED"
-                        ? EN.moment3.titleFailed
-                        : EN.moment3.titleNeedsSetup}
+                        ? EN.stage4.titleFailed
+                        : EN.stage4.titleNeedsSetup}
                 </h2>
                 <p className="pane-subtitle">
                   {completionKind === "CONNECTED"
-                    ? EN.moment3.subtitleConnected
+                    ? EN.stage4.subtitleConnected
                     : completionKind === "SIMULATION"
-                      ? EN.moment3.subtitleSimulation
+                      ? EN.stage4.subtitleSimulation
                       : completionKind === "FAILED"
-                        ? EN.moment3.subtitleFailed
-                        : EN.moment3.subtitleNeedsSetup}
+                        ? EN.stage4.subtitleFailed
+                        : EN.stage4.subtitleNeedsSetup}
                 </p>
 
                 <div
@@ -921,12 +1214,12 @@ export function App() {
                 >
                   {effectiveAlias} ({sshUser.trim()}@{targetHost.trim()}) —{" "}
                   {completionKind === "CONNECTED"
-                    ? EN.moment3.titleConnected
+                    ? EN.stage4.titleConnected
                     : completionKind === "SIMULATION"
-                      ? EN.moment3.titleSimulation
+                      ? EN.stage4.titleSimulation
                       : completionKind === "FAILED"
-                        ? EN.moment3.titleFailed
-                        : EN.moment3.titleNeedsSetup}
+                        ? EN.stage4.titleFailed
+                        : EN.stage4.titleNeedsSetup}
                 </div>
 
                 {connectResult ? <div className="banner-warn">{connectResult.message}</div> : null}
@@ -939,10 +1232,10 @@ export function App() {
                         className="btn btn-secondary"
                         onClick={() => {
                           setConnectResult(null);
-                          setMoment("M2");
+                          setStage("S3");
                         }}
                       >
-                        {EN.moment3.retryVerify}
+                        {EN.stage4.retryVerify}
                       </button>
                     ) : null}
                     <button
@@ -953,7 +1246,7 @@ export function App() {
                         setAppState("DASHBOARD");
                       }}
                     >
-                      {EN.moment3.goDashboard}
+                      {EN.stage4.goDashboard}
                     </button>
                   </div>
                   <button
@@ -961,7 +1254,7 @@ export function App() {
                     className="btn btn-primary"
                     onClick={() => void handleConnect(effectiveAlias)}
                   >
-                    {EN.moment3.connectNow}
+                    {EN.stage4.connectNow}
                   </button>
                 </div>
               </>
@@ -1106,7 +1399,7 @@ export function App() {
                     type="button"
                     className="btn-secondary"
                     onClick={() => {
-                      setMoment("WELCOME");
+                      setStage("WELCOME");
                       setAppState("ONBOARDING");
                     }}
                   >
