@@ -936,7 +936,7 @@ doctor_run() {
 
 check_doctor() {
   local scenario out rc expected ok=0
-  for scenario in mac arch cachyos mixed-failure unsupported missing-tailscale stopped malformed-status no-ssh no-python broken-python missing-config malformed-config valid-config partial-config; do
+  for scenario in mac arch cachyos ubuntu mixed-failure unsupported missing-tailscale stopped malformed-status no-ssh no-python broken-python missing-config malformed-config valid-config partial-config; do
     setup_reset
     set_config "${VALID_CONFIG}"
     FAKE_OS=Linux
@@ -946,8 +946,9 @@ check_doctor() {
     case "${scenario}" in
       mac) FAKE_OS=Darwin ;;
       cachyos) DOCTOR_DISTRO=cachyos ;;
+      ubuntu) DOCTOR_DISTRO=ubuntu ;;
       mixed-failure) DOCTOR_STATE=Stopped; mv "${T}/bin-doctor/python3" "${T}/doctor-python"; expected=1 ;;
-      unsupported) DOCTOR_DISTRO=ubuntu; expected=1 ;;
+      unsupported) DOCTOR_DISTRO=fedora; expected=1 ;;
       missing-tailscale) mv "${T}/bin-doctor/tailscale" "${T}/doctor-tail"; expected=1 ;;
       stopped) DOCTOR_STATE=Stopped; expected=1 ;;
       malformed-status) DOCTOR_STATE=invalid; expected=1 ;;
@@ -1054,7 +1055,7 @@ check_installer_safety() {
   done
   setup_reset
   FAKE_OS=Linux
-  DOCTOR_DISTRO=ubuntu
+  DOCTOR_DISTRO=fedora
   rc=0
   out="$(run_iso "${T}/bin-install" "${ROOT}/scripts/setup-workstation.sh" <<< yes 2>&1)" || rc=$?
   [[ "${rc}" -ne 0 ]] || { fail 'installer accepted unsupported Linux'; ok=1; }
@@ -1504,7 +1505,7 @@ check_installer_refusal() {
   local ok=0
   installer_refuses "setup-macos on non-macOS" "${T}/bin-linux" Linux setup-macos.sh "only supports macOS" || ok=1
   installer_refuses "setup-workstation on non-Linux" "${T}/bin-darwin" Darwin setup-workstation.sh "only supports Linux" || ok=1
-  installer_refuses "setup-workstation without pacman" "${T}/bin-nopacman" Linux setup-workstation.sh "Arch-based" || ok=1
+  DOCTOR_DISTRO=fedora installer_refuses "setup-workstation on unsupported Linux" "${T}/bin-install" Linux setup-workstation.sh "supported Linux targets" || ok=1
   return "${ok}"
 }
 
@@ -1918,6 +1919,75 @@ check_setup_device_centric() {
   return 0
 }
 
+check_linux_wsl2_compat() {
+  local h cfg b out rc=0 pv_wsl pv_native
+  h="$(mktemp -d "${T}/linuxwsl.XXXXXX")"
+  b="$(mktemp -d "${T}/linuxwsl-bin.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack" "${b}/real"
+  chmod 700 "${h}/.config" "${h}/.config/jack"
+  cfg="${h}/.config/jack/config"
+  pv_wsl="${T}/proc-version-wsl2"
+  pv_native="${T}/proc-version-native"
+  printf 'Linux version 5.15.153.1-microsoft-standard-WSL2 (root@build) #1 SMP\n' > "${pv_wsl}"
+  printf 'Linux version 6.8.0-generic (buildd@lcy) #1 SMP\n' > "${pv_native}"
+
+  for k in bash stat grep dirname find mkdir ln readlink rm chmod mktemp mv rmdir timeout; do link_tool "${b}" "${k}" || return 1; done
+  ln -s "$(command -v cat)" "${b}/real/cat"
+  write_stub "${b}/uname" 'echo Linux'
+  write_stub "${b}/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=%s\n" "${TEST_DISTRO}"; else exec "${0%/*}/real/cat" "$@"; fi'
+  write_stub "${b}/ssh" 'exit 0'
+
+  # 1. Ubuntu clean install & uninstall without pacman/apt/sudo/systemd
+  if ! printf 'yes\n' | env -i HOME="${h}" PATH="${b}" TEST_DISTRO=ubuntu "${ROOT}/scripts/setup-workstation.sh" >/dev/null; then
+    fail "ubuntu setup-workstation.sh failed"; return 1
+  fi
+  [[ -L "${h}/.local/bin/jack" ]] || { fail "ubuntu symlink missing"; return 1; }
+
+  # 2. Ubuntu native doctor/diagnose (SSH-only direct device -> doctor rc=2 WARN, doctor --json rc=0 WARN native)
+  printf 'DEVICE_ubox_USER=alex\nDEVICE_ubox_HOST=127.0.0.1\n' > "${cfg}"
+  chmod 600 "${cfg}"
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" TEST_DISTRO=ubuntu JACK_PROC_VERSION="${pv_native}" "${h}/.local/bin/jack" doctor 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 2 ]] || ! contains "${out}" 'PASS Platform: Ubuntu Linux.'; then
+    fail "ubuntu native doctor failed: rc=${rc} ${out}"; return 1
+  fi
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" TEST_DISTRO=ubuntu JACK_PROC_VERSION="${pv_native}" "${h}/.local/bin/jack" doctor --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '"runtime":"native"' || ! contains "${out}" '"supported":true'; then
+    fail "ubuntu native doctor --json failed: rc=${rc} ${out}"; return 1
+  fi
+
+  # 3. WSL2 Ubuntu fixture -> runtime=wsl2 and Ubuntu Linux (WSL2)
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" TEST_DISTRO=ubuntu JACK_PROC_VERSION="${pv_wsl}" "${h}/.local/bin/jack" doctor 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 2 ]] || ! contains "${out}" 'PASS Platform: Ubuntu Linux (WSL2).'; then
+    fail "ubuntu wsl2 doctor failed: rc=${rc} ${out}"; return 1
+  fi
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" TEST_DISTRO=ubuntu JACK_PROC_VERSION="${pv_wsl}" "${h}/.local/bin/jack" doctor --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '"runtime":"wsl2"' || ! contains "${out}" '"supported":true'; then
+    fail "ubuntu wsl2 doctor --json failed: rc=${rc} ${out}"; return 1
+  fi
+
+  # 4. Negative: unsupported distro & ambiguous/empty os-release fail deterministically
+  for bad_distro in fedora ""; do
+    if printf 'yes\n' | env -i HOME="${h}" PATH="${b}" TEST_DISTRO="${bad_distro}" "${ROOT}/scripts/setup-workstation.sh" >/dev/null 2>&1; then
+      fail "setup-workstation.sh accepted unsupported distro '${bad_distro}'"; return 1
+    fi
+    rc=0
+    out="$(env -i HOME="${h}" PATH="${b}" TEST_DISTRO="${bad_distro}" JACK_PROC_VERSION="${pv_native}" "${JACK}" doctor --json 2>&1)" || rc=$?
+    if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"supported":false'; then
+      fail "doctor --json accepted unsupported distro '${bad_distro}': rc=${rc} ${out}"; return 1
+    fi
+  done
+
+  printf 'yes\n' | env -i HOME="${h}" PATH="${b}" TEST_DISTRO=ubuntu "${h}/.local/bin/jack" uninstall >/dev/null || {
+    fail "ubuntu uninstall failed"; return 1
+  }
+  return 0
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1952,6 +2022,7 @@ run_check DEFAULT_AND_STATUS check_default_and_status
 run_check ADD_ALIAS_UX check_add_alias_ux
 run_check DOCTOR_DIAGNOSE_REGISTRY check_doctor_diagnose_registry
 run_check SETUP_DEVICE_CENTRIC check_setup_device_centric
+run_check LINUX_WSL2_COMPAT check_linux_wsl2_compat
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046

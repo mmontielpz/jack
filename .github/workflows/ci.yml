@@ -18,3 +18,14 @@ jobs:
 
       - name: Contributor validation
         run: ./scripts/dev-check.sh
+
+      - name: Isolated Ubuntu native smoke test
+        run: |
+          T="$(mktemp -d)"
+          trap 'rm -rf "$T"' EXIT
+          mkdir -p "$T/home/.config/jack"
+          chmod 700 "$T/home" "$T/home/.config" "$T/home/.config/jack"
+          printf 'yes\n' | HOME="$T/home" ./scripts/setup-workstation.sh
+          HOME="$T/home" "$T/home/.local/bin/jack" add ci-box --non-interactive --yes --user ciuser --host 127.0.0.1
+          HOME="$T/home" "$T/home/.local/bin/jack" doctor --json | grep -q '"supported":true'
+          printf 'yes\n' | HOME="$T/home" "$T/home/.local/bin/jack" uninstall

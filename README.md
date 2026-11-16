@@ -11,8 +11,8 @@ Stable release: [v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0)
 - Configure destinations with guided `jack setup` (direct SSH or optional Tailscale), `jack add <alias>`, or a plain configuration file.
 - Diagnose prerequisites and reachability with `jack doctor`, `jack diagnose`, and `jack status [alias]`.
 
-Supported client installation targets: **macOS** (primary) and **Arch Linux / CachyOS**.
-Other Linux distributions and Windows are not supported client installation paths (Windows hosts can be registered as remote SSH/Tailscale destinations).
+Supported client installation targets: **macOS** (primary), **Arch Linux / CachyOS**, and **Ubuntu Linux (including Ubuntu on WSL2)**.
+Other Linux distributions and native Windows are not supported client installation paths (Windows hosts can be registered as remote SSH/Tailscale destinations).
 JACK provides terminal access, not remote desktop. It relies on your existing
 OpenSSH and optional Tailscale authentication and authorization.
 
