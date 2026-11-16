@@ -15,6 +15,7 @@ WORKSTATION_USER=""
 WORKSTATION_HOST=""
 MAC_USER=""
 MAC_HOST=""
+DEFAULT_DEVICE=""
 DEVICE_LINES=()
 REG_ALIASES=()
 REG_USERS=()
@@ -67,6 +68,11 @@ valid_device_alias() {
       return 1
       ;;
   esac
+}
+
+valid_default_alias() {
+  local alias="$1"
+  [[ "${alias}" == "workstation" || "${alias}" == "mac" ]] || valid_device_alias "${alias}"
 }
 
 registry_upsert() {
@@ -133,6 +139,7 @@ load_config() {
   WORKSTATION_HOST=""
   MAC_USER=""
   MAC_HOST=""
+  DEFAULT_DEVICE=""
   DEVICE_LINES=()
 REG_ALIASES=()
 REG_USERS=()
@@ -153,7 +160,7 @@ REG_SOURCES=()
     key="${line%%=*}"
     value="${line#*=}"
     case "${key}" in
-      WORKSTATION_USER|WORKSTATION_HOST|MAC_USER|MAC_HOST) ;;
+      WORKSTATION_USER|WORKSTATION_HOST|MAC_USER|MAC_HOST|DEFAULT_DEVICE) ;;
       DEVICE_*_USER)
         alias="${key#DEVICE_}"
         alias="${alias%_USER}"
@@ -173,6 +180,7 @@ REG_SOURCES=()
     case "${key}" in
       *_USER) valid_user "${value}" || { config_error "invalid ${key} at line ${number}"; return 1; } ;;
       *_HOST) valid_host "${value}" || { config_error "invalid ${key} at line ${number}"; return 1; } ;;
+      DEFAULT_DEVICE) valid_default_alias "${value}" || { config_error "invalid DEFAULT_DEVICE at line ${number}"; return 1; } ;;
     esac
     # Fixed assignments only: configuration never supplies a variable name to execute.
     case "${key}" in
@@ -180,6 +188,7 @@ REG_SOURCES=()
       WORKSTATION_HOST) WORKSTATION_HOST="${value}" ;;
       MAC_USER) MAC_USER="${value}" ;;
       MAC_HOST) MAC_HOST="${value}" ;;
+      DEFAULT_DEVICE) DEFAULT_DEVICE="${value}" ;;
       DEVICE_*_USER|DEVICE_*_HOST) DEVICE_LINES+=("${key}=${value}") ;;
     esac
   done < "${CONFIG_FILE}"
@@ -202,6 +211,8 @@ Usage:
   jack mac      Connect to Mac
   jack devices  List configured devices offline (--json supported)
   jack connect <alias> Connect to a configured device by alias
+  jack default <alias> [--yes] Set the default device for bare `jack`
+  jack status [alias] [--json] Show status (all or specific alias)
   jack --status Show status
   jack doctor   Read-only first-run diagnostics (0 pass, 1 failure, 2 warnings)
   jack --version Show version (no configuration or network access)
@@ -508,6 +519,21 @@ cmd_status() {
 }
 
 cmd_connect() {
+  if [[ -n "${DEFAULT_DEVICE}" ]]; then
+    local idx u h
+    idx="$(registry_find "${DEFAULT_DEVICE}")" || {
+      echo "jack: default device '${DEFAULT_DEVICE}' is not configured" >&2
+      exit 1
+    }
+    u="${REG_USERS[$idx]}"
+    h="${REG_HOSTS[$idx]}"
+    if [[ -z "${u}" || -z "${h}" ]]; then
+      echo "jack: default device '${DEFAULT_DEVICE}' is incomplete; both user and host are required" >&2
+      exit 1
+    fi
+    cmd_connect_alias "${DEFAULT_DEVICE}"
+    return
+  fi
   require_device Workstation "${WORKSTATION_USER}" "${WORKSTATION_HOST}" WORKSTATION
   require_ssh
   require_tailscale
@@ -544,6 +570,7 @@ cmd_devices() {
   WORKSTATION_HOST=""
   MAC_USER=""
   MAC_HOST=""
+  DEFAULT_DEVICE=""
   DEVICE_LINES=()
   REG_ALIASES=()
   REG_USERS=()
@@ -619,6 +646,124 @@ cmd_connect_alias() {
   exec ssh "${u}@${h}"
 }
 
+is_tailscale_host() {
+  local host="$1" src="$2"
+  [[ "${src}" == legacy_workstation || "${src}" == legacy_mac || "${host}" == *.ts.net ]] && return 0
+  [[ "${host}" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]]
+}
+
+cmd_status_alias() {
+  local alias="$1" json_mode="${2:-0}" idx u h src ts_status="not_installed" ssh_status="not_installed"
+  local reach="unknown" ssh_port="unknown" ok=0
+  load_config || return 1
+  idx="$(registry_find "${alias}")" || {
+    echo "jack status: unknown device alias '${alias}'" >&2
+    return 1
+  }
+  u="${REG_USERS[$idx]}"
+  h="${REG_HOSTS[$idx]}"
+  src="${REG_SOURCES[$idx]}"
+  if [[ -z "${u}" || -z "${h}" ]]; then
+    echo "jack status: device '${alias}' is incomplete; both user and host are required" >&2
+    return 1
+  fi
+  if check_tailscale_connected; then
+    ts_status="connected"
+  elif check_tailscale_installed; then
+    ts_status="disconnected"
+  fi
+  if check_ssh; then
+    ssh_status="available"
+  else
+    ok=1
+  fi
+
+  if is_tailscale_host "${h}" "${src}"; then
+    if [[ "${ts_status}" == "connected" ]]; then
+      if check_reachable "${h}"; then
+        reach="reachable"
+        if check_ssh_port "${h}"; then ssh_port="available"; else ssh_port="unavailable"; ok=1; fi
+      else
+        reach="unreachable"
+        ok=1
+      fi
+    else
+      ok=1
+    fi
+  else
+    if check_ssh_port "${h}"; then
+      reach="direct_ssh"
+      ssh_port="available"
+    else
+      reach="unreachable"
+      ssh_port="unavailable"
+      ok=1
+    fi
+  fi
+
+  if [[ "${json_mode}" -eq 1 ]]; then
+    printf '{"subsystem":"jack","version":"%s","status":"%s","tailscale":"%s","ssh_client":"%s","device":{"alias":"%s","configured":true,"user":"%s","host":"%s","source":"%s","reachability":"%s","ssh":"%s"}}\n' \
+      "${JACK_VERSION}" \
+      "$([[ ${ok} -eq 0 ]] && echo 'HEALTHY' || echo 'DEGRADED')" \
+      "${ts_status}" "${ssh_status}" "${alias}" "${u}" "${h}" "${src}" "${reach}" "${ssh_port}"
+    return "${ok}"
+  fi
+  echo "Tailscale: ${ts_status}"
+  echo "${alias}: configured ${u}@${h} — ${reach}; SSH ${ssh_port}"
+  echo "SSH client: ${ssh_status}; authentication not tested."
+  return "${ok}"
+}
+
+cmd_default() {
+  local alias="" yes_flag=0 arg original answer idx u h
+  for arg in "$@"; do
+    case "${arg}" in
+      --help|-h)
+        printf 'Usage:\n  jack default <alias> [--yes]\n'
+        return 0
+        ;;
+      --yes) yes_flag=1 ;;
+      -*) echo "jack default: unknown option: ${arg}" >&2; return 1 ;;
+      *)
+        [[ -z "${alias}" ]] || { echo "jack default: too many arguments" >&2; return 1; }
+        alias="${arg}"
+        ;;
+    esac
+  done
+  [[ -n "${alias}" ]] || { echo "jack default: missing device alias" >&2; return 1; }
+  valid_default_alias "${alias}" || {
+    echo "jack default: invalid device alias '${alias}'" >&2
+    return 1
+  }
+  setup_paths_safe || return 1
+  original="$(setup_snapshot)" || return 1
+  load_config || return 1
+  idx="$(registry_find "${alias}")" || {
+    echo "jack default: unknown device alias '${alias}'" >&2
+    return 1
+  }
+  u="${REG_USERS[$idx]}"
+  h="${REG_HOSTS[$idx]}"
+  if [[ -z "${u}" || -z "${h}" ]]; then
+    echo "jack default: device '${alias}' is incomplete; both user and host are required" >&2
+    return 1
+  fi
+  if [[ "${DEFAULT_DEVICE}" == "${alias}" ]]; then
+    printf "Default device is already '%s'.\n" "${alias}"
+    return 0
+  fi
+  if [[ "${yes_flag}" -eq 0 ]]; then
+    setup_read "Set default device to '${alias}' (${u}@${h})? [y/N]: " || return 1
+    case "${answer}" in
+      y|yes|Y|YES) ;;
+      *) echo "Cancelled; nothing changed." >&2; return 1 ;;
+    esac
+  fi
+  DEFAULT_DEVICE="${alias}"
+  setup_save || return 1
+  printf "Default device set to '%s' (%s@%s).\n" "${alias}" "${u}" "${h}"
+}
+
 setup_usage() {
   cat <<'HELP'
 Usage:
@@ -681,6 +826,7 @@ setup_preview() {
   if [[ -n "${WORKSTATION_HOST}" ]]; then printf 'WORKSTATION_HOST=%s\n' "${WORKSTATION_HOST}" || return 1; fi
   if [[ -n "${MAC_USER}" ]]; then printf 'MAC_USER=%s\n' "${MAC_USER}" || return 1; fi
   if [[ -n "${MAC_HOST}" ]]; then printf 'MAC_HOST=%s\n' "${MAC_HOST}" || return 1; fi
+  if [[ -n "${DEFAULT_DEVICE}" ]]; then printf 'DEFAULT_DEVICE=%s\n' "${DEFAULT_DEVICE}" || return 1; fi
   for line in "${DEVICE_LINES[@]+"${DEVICE_LINES[@]}"}"; do
     printf '%s\n' "${line}" || return 1
   done
@@ -759,6 +905,7 @@ cmd_add_device() {
   WORKSTATION_HOST=""
   MAC_USER=""
   MAC_HOST=""
+  DEFAULT_DEVICE=""
   DEVICE_LINES=()
 REG_ALIASES=()
 REG_USERS=()
@@ -1337,14 +1484,25 @@ main() {
       cmd_repair "$@"
       ;;
     --status|status)
-      load_config
-      if [[ $# -eq 2 && "$2" == --json ]]; then
-        cmd_status_json
-      elif [[ $# -eq 1 ]]; then
+      if [[ $# -eq 1 ]]; then
+        load_config
         cmd_status
+      elif [[ $# -eq 2 && "$2" == --json ]]; then
+        load_config
+        cmd_status_json
+      elif [[ $# -eq 2 ]]; then
+        cmd_status_alias "$2" 0
+      elif [[ $# -eq 3 && "$3" == --json ]]; then
+        cmd_status_alias "$2" 1
+      elif [[ $# -eq 3 && "$2" == --json ]]; then
+        cmd_status_alias "$3" 1
       else
         echo "jack: too many arguments" >&2; usage >&2; exit 1
       fi
+      ;;
+    default)
+      shift
+      cmd_default "$@"
       ;;
     mac)
       if [[ $# -gt 1 ]]; then echo "jack: too many arguments" >&2; usage >&2; exit 1; fi
