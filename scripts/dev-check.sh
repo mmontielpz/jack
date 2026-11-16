@@ -1697,6 +1697,75 @@ check_default_and_status() {
   return "${rc}"
 }
 
+check_add_alias_ux() {
+  local h cfg b out rc=0
+  h="$(mktemp -d "${T}/addalias.XXXXXX")"
+  b="$(mktemp -d "${T}/addalias-bin.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack"
+  chmod 700 "${h}/.config" "${h}/.config/jack"
+  cfg="${h}/.config/jack/config"
+  for k in bash stat cat grep dirname find mkdir ln readlink rm chmod mktemp mv rmdir; do link_tool "${b}" "${k}" || return 1; done
+
+  printf 'WORKSTATION_USER=alex\nWORKSTATION_HOST=ws.example.ts.net\nDEFAULT_DEVICE=workstation\n' > "${cfg}"
+  chmod 600 "${cfg}"
+
+  # 1. Alias-first interactive preview + cancel leaves config untouched
+  if printf 'carol\n127.0.0.1\nn\n' | env -i HOME="${h}" PATH="${b}" "${JACK}" add lab-box >/dev/null 2>&1; then
+    fail "cancelled jack add lab-box succeeded"; rc=1
+  fi
+  grep -q 'DEVICE_lab-box_USER' "${cfg}" && { fail "cancelled jack add modified config"; rc=1; }
+
+  # 2. Alias-first interactive preview + confirm preserves DEFAULT_DEVICE and existing profiles
+  out="$(printf 'carol\n127.0.0.1\nyes\n' | env -i HOME="${h}" PATH="${b}" "${JACK}" add lab-box)" || {
+    fail "confirmed jack add lab-box failed"; rc=1
+  }
+  contains "${out}" "Preview: lab-box -> carol@127.0.0.1" || { fail "missing preview output: ${out}"; rc=1; }
+  grep -q '^DEFAULT_DEVICE=workstation$' "${cfg}" || { fail "lost DEFAULT_DEVICE"; rc=1; }
+  grep -q '^DEVICE_lab-box_USER=carol$' "${cfg}" || { fail "missing DEVICE_lab-box_USER"; rc=1; }
+  [[ "$(stat -c '%a' "${cfg}")" == 600 ]] || { fail "config mode not 600"; rc=1; }
+
+  # 3. Non-interactive complete succeeds; incomplete/missing consent fail closed
+  if ! env -i HOME="${h}" PATH="${b}" "${JACK}" add win-vm --non-interactive --yes --user dave --host 100.64.0.22 >/dev/null; then
+    fail "non-interactive jack add failed"; rc=1
+  fi
+  grep -q '^DEVICE_win-vm_HOST=100.64.0.22$' "${cfg}" || { fail "missing DEVICE_win-vm_HOST"; rc=1; }
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add box2 --non-interactive --user dave --host 100.64.0.23 >/dev/null 2>&1; then
+    fail "non-interactive without --yes accepted"; rc=1
+  fi
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add box2 --non-interactive --yes --user dave >/dev/null 2>&1; then
+    fail "non-interactive without --host accepted"; rc=1
+  fi
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add box2 --yes >/dev/null 2>&1; then
+    fail "--yes without --user/--host accepted"; rc=1
+  fi
+
+  # 4. Duplicate, reserved, malformed alias, bad user/host, and lock failure
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add lab-box --non-interactive --yes --user eve --host 100.64.0.99 >/dev/null 2>&1; then
+    fail "duplicate alias accepted"; rc=1
+  fi
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add workstation --non-interactive --yes --user eve --host 100.64.0.99 >/dev/null 2>&1; then
+    fail "reserved alias accepted"; rc=1
+  fi
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add "Bad Alias" --non-interactive --yes --user eve --host 100.64.0.99 >/dev/null 2>&1; then
+    fail "malformed alias accepted"; rc=1
+  fi
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add box3 --non-interactive --yes --user "bad;user" --host 100.64.0.99 >/dev/null 2>&1; then
+    fail "malformed user accepted"; rc=1
+  fi
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add box3 --non-interactive --yes --user eve --host 999.0.0.1 >/dev/null 2>&1; then
+    fail "malformed host accepted"; rc=1
+  fi
+
+  mkdir -p "${h}/.config/jack/.setup-lock"
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" add box3 --non-interactive --yes --user eve --host 100.64.0.99 >/dev/null 2>&1; then
+    fail "lock did not block concurrent jack add"; rc=1
+  fi
+  rmdir "${h}/.config/jack/.setup-lock"
+  grep -q 'DEVICE_box3_USER' "${cfg}" && { fail "locked save modified config"; rc=1; }
+  return "${rc}"
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1728,6 +1797,7 @@ run_check INSTALL_CONSENT_RACE check_install_consent_race
 run_check ADD_DEVICE check_add_device
 run_check DEVICE_REGISTRY check_device_registry
 run_check DEFAULT_AND_STATUS check_default_and_status
+run_check ADD_ALIAS_UX check_add_alias_ux
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
