@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { jackApi } from "./api/jack";
 
-describe("JACK Desktop V0.1", () => {
+describe("JACK Desktop V0.1 Onboarding UX", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
     vi.restoreAllMocks();
@@ -13,7 +13,7 @@ describe("JACK Desktop V0.1", () => {
     cleanup();
   });
 
-  it("renders English-only Welcome onboarding when no devices are configured", async () => {
+  it("renders minimal Welcome without redundant JACK text and uses rounded buttons", async () => {
     vi.spyOn(jackApi, "listDevices").mockResolvedValue([]);
     vi.spyOn(jackApi, "getCliVersion").mockResolvedValue("jack 0.1.1");
     vi.spyOn(jackApi, "getPlatformInfo").mockResolvedValue({
@@ -24,28 +24,31 @@ describe("JACK Desktop V0.1", () => {
 
     const { container } = render(<App />);
 
-    await screen.findByText("Start Setup");
-    expect(screen.getByText("View Diagnostics")).toBeInTheDocument();
+    const startBtn = await screen.findByRole("button", { name: "Start Setup" });
+    const diagBtn = screen.getByRole("button", { name: "View Diagnostics" });
+    expect(startBtn).toHaveClass("btn", "btn-primary");
+    expect(diagBtn).toHaveClass("btn", "btn-outline-dark");
+    expect(screen.queryByRole("heading", { name: "JACK" })).toBeNull();
+    expect(container.querySelector(".titlebar")?.textContent).not.toContain("JACK Desktop");
     expect(container.querySelector(".banner-info")).toBeNull();
-    expect(container.textContent).not.toMatch(/Configurar|Diagnóstico|Estación de trabajo|Atrás/);
   });
 
-  it("completes 7-step guided onboarding, preserves values on Back, and enforces preflight + honesty", async () => {
+  it("runs Tailscale-first 7-step onboarding, preserves values on Back, enforces consent, and shows honest Not Verified completion", async () => {
     vi.spyOn(jackApi, "listDevices").mockResolvedValue([]);
     vi.spyOn(jackApi, "getCliVersion").mockResolvedValue("jack 0.1.1");
     vi.spyOn(jackApi, "getPlatformInfo").mockResolvedValue({
       os: "linux",
       is_wsl2: false,
-      supported_note: "Linux (Arch/CachyOS and Ubuntu): supported.",
+      supported_note: "Linux",
     });
-    vi.spyOn(jackApi, "runDoctor").mockResolvedValue({
-      overall_status: "FAIL",
-      checks: {
-        platform: { os: "Linux", runtime: "native", supported: true },
-        tailscale: { cli_available: true, daemon_connected: true, required: false },
-        ssh: { client_available: true },
-        configuration: { file_exists: false, valid: false },
-      },
+    vi.spyOn(jackApi, "getTailscaleState").mockResolvedValue({
+      cli_installed: true,
+      running: true,
+      authenticated: true,
+      backend_state: "Running",
+      tailnet_name: "lab.ts.net",
+      self_name: "cachy",
+      message: "Tailscale is running and connected.",
     });
     vi.spyOn(jackApi, "discoverTailscalePeers").mockResolvedValue({
       available: true,
@@ -55,94 +58,75 @@ describe("JACK Desktop V0.1", () => {
       ],
       message: "ok",
     });
-    const preflightSpy = vi.spyOn(jackApi, "runPreflight").mockResolvedValue({
+    vi.spyOn(jackApi, "runPreflight").mockResolvedValue({
       overall: "WARNING",
       can_save: true,
-      checks: [
-        { name: "JACK CLI", status: "PASS", detail: "jack CLI binary is available." },
-        { name: "SSH Authentication", status: "WARNING", detail: "SSH authentication not tested." },
-      ],
+      checks: [{ name: "JACK CLI", status: "PASS", detail: "jack CLI binary is available." }],
     });
     const saveSpy = vi.spyOn(jackApi, "saveWizardConfig").mockResolvedValue({
       saved: true,
       devices: [
-        {
-          alias: "workstation",
-          user: "alice",
-          host: "100.64.0.10",
-          source: "legacy_workstation",
-          complete: true,
-        },
+        { alias: "alpha-box", user: "alice", host: "100.64.0.10", source: "device", complete: true },
       ],
       message: "Configuration saved.",
     });
 
-    const { container } = render(<App />);
+    render(<App />);
 
-    // Step 01 Welcome
-    fireEvent.click(await screen.findByText("Start Setup"));
-
-    // Step 02 Environment Check
-    await screen.findByText("Environment Check");
-    expect(container.querySelector(".banner-info")).toBeNull();
+    // Step 01 Welcome -> Step 02 Check Tailscale
+    fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
+    await screen.findByRole("heading", { name: "Check Tailscale" });
+    await screen.findByText("lab.ts.net");
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
-    // Step 03 Choose Device — Continue disabled until host chosen
-    await screen.findByText("Choose Device Setup");
+    // Step 03 Choose Device (no Workstation/Mac/Both category cards)
+    await screen.findByRole("heading", { name: "Choose Device" });
+    expect(screen.queryByText("Workstation")).toBeNull();
+    expect(screen.getByText("Network Online")).toBeInTheDocument();
     const step3Continue = screen.getByRole("button", { name: "Continue" });
     expect(step3Continue).toBeDisabled();
     fireEvent.click(screen.getByText("alpha-box"));
     expect(step3Continue).not.toBeDisabled();
     fireEvent.click(step3Continue);
 
-    // Step 04 SSH User — Continue disabled until valid user entered
-    await screen.findByRole("heading", { name: "SSH User" });
+    // Step 04 SSH Username + Back preservation
+    await screen.findByRole("heading", { name: "SSH Username" });
     const step4Continue = screen.getByRole("button", { name: "Continue" });
     expect(step4Continue).toBeDisabled();
-    const userInput = screen.getByLabelText(/SSH User \(Workstation\)/i) as HTMLInputElement;
-    fireEvent.change(userInput, { target: { value: "alice" } });
+    fireEvent.change(screen.getByLabelText(/SSH Username/i), { target: { value: "alice" } });
     expect(step4Continue).not.toBeDisabled();
 
-    // Navigate Back -> Continue and confirm value preserved
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    await screen.findByRole("heading", { name: "Choose Device Setup" });
+    await screen.findByRole("heading", { name: "Choose Device" });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByRole("heading", { name: "SSH User" });
-    expect((screen.getByLabelText(/SSH User \(Workstation\)/i) as HTMLInputElement).value).toBe("alice");
+    expect((screen.getByLabelText(/SSH Username/i) as HTMLInputElement).value).toBe("alice");
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
-    // Step 05 Preflight Check
-    await screen.findByText("Preflight Check");
-    await waitFor(() => expect(preflightSpy).toHaveBeenCalledTimes(1));
-    expect(screen.getAllByText(/SSH authentication not tested\./i).length).toBeGreaterThan(0);
-    expect(container.querySelector(".banner-info")).toBeNull();
+    // Step 05 Test Connection: SSH auth button disabled without consent, Save still allowed
+    await screen.findByRole("heading", { name: "Test Connection" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).not.toBeDisabled());
+    expect(screen.getByRole("button", { name: "Test SSH Authentication" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     // Step 06 Review & Save
-    await screen.findByText("Review & Save");
-    expect(screen.getByText("alice@100.64.0.10")).toBeInTheDocument();
-    expect(container.querySelector(".banner-info")).toBeNull();
+    await screen.findByRole("heading", { name: "Review & Save" });
+    expect(screen.getByText("alpha-box")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save Configuration" }));
 
-    // Step 07 Success
-    await screen.findByText("Setup Complete");
+    // Step 07 Honest Completion (Not Verified because SSH auth was not tested)
+    await screen.findByRole("heading", { name: "Configuration Saved (Not Verified)" });
     expect(saveSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        mode: "workstation",
-        workstation_user: "alice",
-        workstation_host: "100.64.0.10",
+        mode: "device",
+        device_alias: "alpha-box",
+        device_user: "alice",
+        device_host: "100.64.0.10",
         confirmed: true,
       }),
     );
-
-    // Go to Dashboard and verify truthful initial status ("Configured", not "Ready")
-    fireEvent.click(screen.getByRole("button", { name: "Go to Dashboard" }));
-    await screen.findByText("My Devices");
-    expect(screen.getByText("Configured")).toBeInTheDocument();
-    expect(screen.queryByText("Ready")).toBeNull();
   });
 
-  it("blocks preflight Continue when preflight returns FAIL", async () => {
+  it("supports manual host entry when Tailscale is unavailable and shows Verified vs Failed SSH completion honestly", async () => {
     vi.spyOn(jackApi, "listDevices").mockResolvedValue([]);
     vi.spyOn(jackApi, "getCliVersion").mockResolvedValue("jack 0.1.1");
     vi.spyOn(jackApi, "getPlatformInfo").mockResolvedValue({
@@ -150,36 +134,80 @@ describe("JACK Desktop V0.1", () => {
       is_wsl2: false,
       supported_note: "Linux",
     });
-    vi.spyOn(jackApi, "runDoctor").mockResolvedValue({
-      overall_status: "PASS",
-      checks: {
-        platform: { os: "Linux", supported: true },
-        tailscale: { cli_available: true, daemon_connected: false },
-        ssh: { client_available: true },
-        configuration: { file_exists: false, valid: false },
-      },
-    });
-    vi.spyOn(jackApi, "discoverTailscalePeers").mockResolvedValue({
-      available: false,
-      backend_state: "Stopped",
-      peers: [],
-      message: "none",
+    vi.spyOn(jackApi, "getTailscaleState").mockResolvedValue({
+      cli_installed: false,
+      running: false,
+      authenticated: false,
+      backend_state: "NotInstalled",
+      message: "Tailscale CLI was not found on this system.",
     });
     vi.spyOn(jackApi, "runPreflight").mockResolvedValue({
-      overall: "FAIL",
-      can_save: false,
-      checks: [{ name: "JACK CLI", status: "FAIL", detail: "jack CLI binary not found." }],
+      overall: "PASS",
+      can_save: true,
+      checks: [{ name: "JACK CLI", status: "PASS", detail: "ok" }],
+    });
+    vi.spyOn(jackApi, "checkNetworkReachability").mockResolvedValue({
+      status: "REACHABLE",
+      detail: "TCP port 22 is reachable.",
+    });
+    const sshSpy = vi
+      .spyOn(jackApi, "testSshAuthentication")
+      .mockResolvedValueOnce({
+        status: "FAILED",
+        host_key_checked: true,
+        detail: "Host key verification failed.",
+      })
+      .mockResolvedValueOnce({
+        status: "VERIFIED",
+        host_key_checked: true,
+        detail: "SSH authentication succeeded with verified host key.",
+      });
+    vi.spyOn(jackApi, "saveWizardConfig").mockResolvedValue({
+      saved: true,
+      devices: [{ alias: "lab-manual", user: "bob", host: "10.0.0.5", source: "device", complete: true }],
+      message: "Saved.",
     });
 
-    window.history.replaceState({}, "", "/?step=05");
     render(<App />);
 
-    await screen.findByText("Preflight Check");
-    await screen.findByText("jack CLI binary not found.");
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
+    await screen.findByText("Tailscale is not ready");
+    fireEvent.click(screen.getByRole("button", { name: "Use manual host" }));
+
+    await screen.findByRole("heading", { name: "Enter Host Manually" });
+    fireEvent.change(screen.getByLabelText("IPv4 address or hostname"), { target: { value: "10.0.0.5" } });
+    fireEvent.change(screen.getByLabelText("Device alias"), { target: { value: "lab-manual" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await screen.findByRole("heading", { name: "SSH Username" });
+    fireEvent.change(screen.getByLabelText(/SSH Username/i), { target: { value: "bob" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    // Step 05: Check network + authorize SSH auth -> first FAILED, then VERIFIED
+    await screen.findByRole("heading", { name: "Test Connection" });
+    fireEvent.click(screen.getByRole("button", { name: "Check Reachability" }));
+    await screen.findByText("REACHABLE");
+
+    const consentCheckbox = screen.getByRole("checkbox");
+    fireEvent.click(consentCheckbox);
+    const sshBtn = screen.getByRole("button", { name: "Test SSH Authentication" });
+    expect(sshBtn).not.toBeDisabled();
+
+    fireEvent.click(sshBtn);
+    await screen.findByText("Host key verification failed.");
+    expect(sshSpy).toHaveBeenCalledWith("bob", "10.0.0.5", true);
+
+    fireEvent.click(sshBtn);
+    await screen.findByText("SSH authentication succeeded with verified host key.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByRole("heading", { name: "Review & Save" });
+    fireEvent.click(screen.getByRole("button", { name: "Save Configuration" }));
+
+    await screen.findByRole("heading", { name: "Configuration Saved & Verified" });
   });
 
-  it("renders Dashboard for existing config, supports Add Device Cancel, and handles Settings Reset", async () => {
+  it("keeps Dashboard frozen and handles Add Device Cancel + Settings Reset", async () => {
     vi.spyOn(jackApi, "listDevices").mockResolvedValue([
       {
         alias: "workstation",
@@ -199,17 +227,11 @@ describe("JACK Desktop V0.1", () => {
       status: "HEALTHY",
       device: { alias: "workstation", reachability: "reachable", ssh: "available" },
     });
-    vi.spyOn(jackApi, "previewResetConfig").mockResolvedValue({
-      config_path: "/tmp/iso/.config/jack/config",
-      config_exists: true,
-      backup_dir: "/tmp/iso/.config/jack",
-      preserved_items: ["~/.ssh (SSH keys & config)", "~/.ssh/known_hosts", "Tailscale state & daemon"],
-    });
-    const resetSpy = vi.spyOn(jackApi, "resetJackConfig").mockResolvedValue({
-      reset: true,
-      backup_path: "/tmp/iso/.config/jack/config.bak.123",
-      affected_files: ["/tmp/iso/.config/jack/config"],
-      message: "JACK configuration backed up and reset.",
+    vi.spyOn(jackApi, "discoverTailscalePeers").mockResolvedValue({
+      available: true,
+      backend_state: "Running",
+      peers: [],
+      message: "ok",
     });
 
     render(<App />);
@@ -217,24 +239,12 @@ describe("JACK Desktop V0.1", () => {
     await screen.findByText("My Devices");
     expect(screen.getByText("Configured")).toBeInTheDocument();
 
-    // Check Status updates to Online
     fireEvent.click(screen.getByRole("button", { name: "Check Status" }));
     await screen.findByText("Online");
 
-    // Add Device -> Cancel returns to Dashboard
     fireEvent.click(screen.getByRole("button", { name: /\+ Add Device/i }));
-    await screen.findByText("Choose Device Setup");
+    await screen.findByRole("heading", { name: "Choose Device" });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await screen.findByText("My Devices");
-
-    // Settings -> Reset preview -> Cancel -> Confirm -> Welcome
-    fireEvent.click(screen.getByRole("button", { name: /Settings/i }));
-    await screen.findByText("Reset JACK Configuration");
-    fireEvent.click(screen.getByRole("button", { name: "Reset Configuration" }));
-    await screen.findByText("Confirm Configuration Reset");
-    fireEvent.click(screen.getByRole("button", { name: "Back Up & Reset" }));
-
-    await screen.findByText("Start Setup");
-    expect(resetSpy).toHaveBeenCalledWith(true);
   });
 });

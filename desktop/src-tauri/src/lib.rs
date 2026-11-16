@@ -242,6 +242,75 @@ pub struct ResetResult {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TailscaleState {
+    pub cli_installed: bool,
+    pub running: bool,
+    pub authenticated: bool,
+    pub backend_state: String,
+    pub tailnet_name: Option<String>,
+    pub self_name: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NetworkReachabilityResult {
+    pub status: String, // "REACHABLE" | "UNREACHABLE" | "NOT_TESTED"
+    pub detail: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SshAuthTestResult {
+    pub status: String, // "VERIFIED" | "FAILED" | "NOT_TESTED"
+    pub host_key_checked: bool,
+    pub detail: String,
+}
+
+pub fn parse_tailscale_state_json(raw: &str) -> TailscaleState {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return TailscaleState {
+            cli_installed: true,
+            running: false,
+            authenticated: false,
+            backend_state: "Unknown".into(),
+            tailnet_name: None,
+            self_name: None,
+            message: "Unable to read Tailscale status JSON.".into(),
+        };
+    };
+    let backend_state = v
+        .get("BackendState")
+        .and_then(|s| s.as_str())
+        .unwrap_or("Unknown")
+        .to_string();
+    let running = backend_state == "Running";
+    let authenticated = running;
+    let tailnet_name = v
+        .pointer("/CurrentTailnet/Name")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    let self_name = v
+        .pointer("/Self/HostName")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    let message = if authenticated {
+        "Tailscale is running and connected.".into()
+    } else if backend_state == "NeedsLogin" {
+        "Tailscale is installed but not signed in.".into()
+    } else {
+        format!("Tailscale state: {}.", backend_state)
+    };
+    TailscaleState {
+        cli_installed: true,
+        running,
+        authenticated,
+        backend_state,
+        tailnet_name,
+        self_name,
+        message,
+    }
+}
+
 pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String> {
     let val: serde_json::Value =
         serde_json::from_str(raw).map_err(|_| "Invalid response from tailscale status.".to_string())?;
@@ -425,6 +494,160 @@ fn run_diagnose() -> Result<serde_json::Value, String> {
             stderr
         })
     }
+}
+
+#[tauri::command]
+fn get_tailscale_state() -> TailscaleState {
+    let out = Command::new("tailscale").args(["status", "--json"]).output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            parse_tailscale_state_json(&stdout)
+        }
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if !stdout.trim().is_empty() {
+                let parsed = parse_tailscale_state_json(&stdout);
+                if parsed.backend_state != "Unknown" {
+                    return parsed;
+                }
+            }
+            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            TailscaleState {
+                cli_installed: true,
+                running: false,
+                authenticated: false,
+                backend_state: "Stopped".into(),
+                tailnet_name: None,
+                self_name: None,
+                message: if stderr.is_empty() {
+                    "Tailscale daemon is not running.".into()
+                } else {
+                    format!("Tailscale is not connected ({}).", stderr)
+                },
+            }
+        }
+        Err(_) => TailscaleState {
+            cli_installed: false,
+            running: false,
+            authenticated: false,
+            backend_state: "NotInstalled".into(),
+            tailnet_name: None,
+            self_name: None,
+            message: "Tailscale CLI was not found on this system.".into(),
+        },
+    }
+}
+
+fn check_network_reachability_impl(
+    host: String,
+    dry_run: bool,
+) -> Result<NetworkReachabilityResult, String> {
+    validate_host(&host)?;
+    if dry_run {
+        return Ok(NetworkReachabilityResult {
+            status: "NOT_TESTED".into(),
+            detail: "Dry-run mode active: network reachability was not tested.".into(),
+        });
+    }
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+    let target = format!("{}:22", host);
+    let Ok(addrs) = target.to_socket_addrs() else {
+        return Ok(NetworkReachabilityResult {
+            status: "UNREACHABLE".into(),
+            detail: format!("Could not resolve host '{}'.", host),
+        });
+    };
+    let timeout = Duration::from_secs(2);
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, timeout).is_ok() {
+            return Ok(NetworkReachabilityResult {
+                status: "REACHABLE".into(),
+                detail: format!("TCP port 22 is reachable on '{}'.", host),
+            });
+        }
+    }
+    Ok(NetworkReachabilityResult {
+        status: "UNREACHABLE".into(),
+        detail: format!("TCP port 22 did not respond on '{}' within 2s.", host),
+    })
+}
+
+#[tauri::command]
+fn check_network_reachability(host: String) -> Result<NetworkReachabilityResult, String> {
+    let dry_run = env::var("JACK_CONNECT_DRY_RUN").as_deref() == Ok("1");
+    check_network_reachability_impl(host, dry_run)
+}
+
+fn test_ssh_authentication_impl(
+    user: String,
+    host: String,
+    consent: bool,
+    dry_run: bool,
+) -> Result<SshAuthTestResult, String> {
+    if !consent {
+        return Err("Explicit user consent is required before testing SSH authentication.".into());
+    }
+    validate_user(&user)?;
+    validate_host(&host)?;
+    if dry_run {
+        return Ok(SshAuthTestResult {
+            status: "NOT_TESTED".into(),
+            host_key_checked: false,
+            detail: "Dry-run mode active: SSH authentication was not tested.".into(),
+        });
+    }
+    let target = format!("{}@{}", user, host);
+    let out = Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "NumberOfPasswordPrompts=0",
+            &target,
+            "true",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to invoke ssh client: {}", e))?;
+
+    if out.status.success() {
+        Ok(SshAuthTestResult {
+            status: "VERIFIED".into(),
+            host_key_checked: true,
+            detail: format!(
+                "SSH authentication succeeded for '{}' with verified host key.",
+                target
+            ),
+        })
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let detail = if stderr.is_empty() {
+            "SSH authentication failed or host key is not trusted in known_hosts.".into()
+        } else {
+            let first_line = stderr.lines().next().unwrap_or("SSH authentication failed.");
+            format!("SSH authentication failed: {}", first_line)
+        };
+        Ok(SshAuthTestResult {
+            status: "FAILED".into(),
+            host_key_checked: true,
+            detail,
+        })
+    }
+}
+
+#[tauri::command]
+fn test_ssh_authentication(
+    user: String,
+    host: String,
+    consent: bool,
+) -> Result<SshAuthTestResult, String> {
+    let dry_run = env::var("JACK_CONNECT_DRY_RUN").as_deref() == Ok("1");
+    test_ssh_authentication_impl(user, host, consent, dry_run)
 }
 
 #[tauri::command]
@@ -881,8 +1104,11 @@ pub fn run() {
             get_device_status,
             run_doctor,
             run_diagnose,
+            get_tailscale_state,
             discover_tailscale_peers,
             run_preflight,
+            check_network_reachability,
+            test_ssh_authentication,
             save_wizard_config,
             set_default_device,
             launch_connect,
@@ -995,5 +1221,28 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         env::remove_var("JACK_HOME");
         env::remove_var("JACK_CONNECT_DRY_RUN");
+    }
+
+    #[test]
+    fn tailscale_state_and_ssh_auth_guardrails() {
+        let running = parse_tailscale_state_json(
+            r#"{"BackendState":"Running","CurrentTailnet":{"Name":"tailnet.ts.net"},"Self":{"HostName":"cachy"}}"#,
+        );
+        assert!(running.cli_installed && running.running && running.authenticated);
+        assert_eq!(running.tailnet_name.as_deref(), Some("tailnet.ts.net"));
+
+        let needs_login = parse_tailscale_state_json(r#"{"BackendState":"NeedsLogin"}"#);
+        assert!(needs_login.cli_installed && !needs_login.authenticated);
+
+        // Consent refusal & injection rejection
+        assert!(test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), false, false).is_err());
+        assert!(test_ssh_authentication_impl("-oProxyCommand=id".into(), "127.0.0.1".into(), true, false).is_err());
+        assert!(check_network_reachability_impl("-oProxyCommand=id".into(), false).is_err());
+
+        // Dry-run honesty (thread-safe, no env mutation)
+        let dry_net = check_network_reachability_impl("127.0.0.1".into(), true).unwrap();
+        assert_eq!(dry_net.status, "NOT_TESTED");
+        let dry_ssh = test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), true, true).unwrap();
+        assert_eq!(dry_ssh.status, "NOT_TESTED");
     }
 }

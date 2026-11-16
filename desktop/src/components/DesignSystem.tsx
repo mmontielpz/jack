@@ -6,11 +6,14 @@ export const JackMark: React.FC<{ size?: number }> = ({ size = 22 }) => (
   <img src={logoUrl} alt="JACK" style={{ height: size, width: "auto", display: "block" }} />
 );
 
-export const TitleBar: React.FC<{ subtitle?: string }> = ({ subtitle }) => (
+export const TitleBar: React.FC<{ subtitle?: string; showBrandText?: boolean }> = ({
+  subtitle,
+  showBrandText = true,
+}) => (
   <header className="titlebar">
     <div className="titlebar-brand">
       <JackMark size={20} />
-      <span>{EN.appTitle}</span>
+      {showBrandText ? <span>{EN.appTitle}</span> : null}
     </div>
     {subtitle ? <span className="titlebar-meta">{subtitle}</span> : null}
   </header>
@@ -67,10 +70,10 @@ export const GearIcon: React.FC = () => (
 export const WizardSidebar: React.FC<{ activeStep: number }> = ({ activeStep }) => {
   const steps = [
     EN.steps.welcome,
-    EN.steps.environment,
+    EN.steps.tailscale,
     EN.steps.device,
     EN.steps.sshUser,
-    EN.steps.preflight,
+    EN.steps.test,
     EN.steps.review,
     EN.steps.done,
   ];

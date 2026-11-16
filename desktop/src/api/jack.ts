@@ -109,6 +109,27 @@ export interface ResetResult {
   message: string;
 }
 
+export interface TailscaleState {
+  cli_installed: boolean;
+  running: boolean;
+  authenticated: boolean;
+  backend_state: string;
+  tailnet_name?: string | null;
+  self_name?: string | null;
+  message: string;
+}
+
+export interface NetworkReachabilityResult {
+  status: "REACHABLE" | "UNREACHABLE" | "NOT_TESTED";
+  detail: string;
+}
+
+export interface SshAuthTestResult {
+  status: "VERIFIED" | "FAILED" | "NOT_TESTED";
+  host_key_checked: boolean;
+  detail: string;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -172,6 +193,36 @@ export const jackApi = {
       recovery_plan: {
         recommended_action: mockDevices.length > 0 ? "NONE" : "Configure at least one device.",
       },
+    };
+  },
+  async getTailscaleState(): Promise<TailscaleState> {
+    if (isTauri()) return tauriInvoke<TailscaleState>("get_tailscale_state");
+    return {
+      cli_installed: true,
+      running: true,
+      authenticated: true,
+      backend_state: "Running",
+      tailnet_name: "example.ts.net",
+      self_name: "local-host",
+      message: "Tailscale is running and connected.",
+    };
+  },
+  async checkNetworkReachability(host: string): Promise<NetworkReachabilityResult> {
+    if (isTauri()) return tauriInvoke<NetworkReachabilityResult>("check_network_reachability", { host });
+    return {
+      status: "NOT_TESTED",
+      detail: "Preview mode: network reachability was not tested.",
+    };
+  },
+  async testSshAuthentication(user: string, host: string, consent: boolean): Promise<SshAuthTestResult> {
+    if (isTauri()) {
+      return tauriInvoke<SshAuthTestResult>("test_ssh_authentication", { user, host, consent });
+    }
+    if (!consent) throw new Error("Explicit user consent is required before testing SSH authentication.");
+    return {
+      status: "NOT_TESTED",
+      host_key_checked: false,
+      detail: "Preview mode: SSH authentication was not tested.",
     };
   },
   async discoverTailscalePeers(): Promise<DiscoveryResult> {
@@ -317,8 +368,40 @@ export const jackApi = {
   },
 };
 
+const RESERVED_ALIASES = new Set([
+  "workstation",
+  "mac",
+  "add",
+  "connect",
+  "devices",
+  "default",
+  "status",
+  "doctor",
+  "diagnose",
+  "repair",
+  "setup",
+  "update",
+  "install",
+  "uninstall",
+  "help",
+  "device",
+]);
+
 export function isValidAlias(v: string): boolean {
-  return /^[a-z0-9][a-z0-9_-]{0,31}$/.test(v) && !["workstation", "mac", "add", "connect", "devices", "default", "status", "doctor", "diagnose", "repair", "setup", "update", "install", "uninstall", "help", "device"].includes(v);
+  return /^[a-z0-9][a-z0-9_-]{0,31}$/.test(v) && !RESERVED_ALIASES.has(v);
+}
+
+export function sanitizeAlias(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .slice(0, 32);
+  if (!cleaned || RESERVED_ALIASES.has(cleaned)) {
+    return "remote-device";
+  }
+  return cleaned;
 }
 
 export function isValidUser(v: string): boolean {
