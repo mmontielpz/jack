@@ -6,9 +6,9 @@ before implementing them.
 
 ## Validate a checkout
 
-Contributor environments are macOS (including system Bash 3.2) and Linux.
-Supported product installation targets are macOS and Arch Linux / CachyOS;
-running offline checks elsewhere does not establish platform support.
+Contributor environments are Linux (Arch/CachyOS, Ubuntu, and Ubuntu on WSL2) and macOS.
+Supported v0.2.0 Linux installation targets are **Arch Linux / CachyOS** and **Ubuntu Linux (including WSL2)**; macOS native remains deferred and unqualified for v0.2.0.
+Running offline checks elsewhere does not establish platform support.
 Bash and Git are required. ShellCheck and GitHub CLI are optional. An available
 Python 3 interpreter exercises optional discovery parsing; without it the checks
 test fallback behavior, so report that limitation.
@@ -36,9 +36,9 @@ do not describe them in public issues.
 
 ## Pull requests
 
-1. Branch from clean, updated `main` using `feat/`, `fix/`, `docs/` or `chore/`.
+1. Branch from clean, updated `develop` using `feat/`, `fix/`, `docs/` or `chore/`.
 2. Keep changes focused; update relevant docs and run `./scripts/dev-check.sh`.
-3. Open a PR to `main` with a conventional-commit title and test evidence,
+3. Open a PR to `develop` with a conventional-commit title and test evidence,
    security implications, and actual platform validation.
 4. Required CI job `checks` runs the same script on Ubuntu and must pass.
    PRs are squash-merged; never bypass CI or protection.

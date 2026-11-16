@@ -1988,6 +1988,48 @@ check_linux_wsl2_compat() {
   return 0
 }
 
+check_json_escaping_and_reinstall() {
+  local h cfg b out rc=0 snap_cfg snap_kh snap_key snap_bak
+  h="$(mktemp -d "${T}/jsonreinst.XXXXXX")"
+  b="$(mktemp -d "${T}/jsonreinst-bin.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack" "${h}/.ssh" "${h}/backups" "${b}/real"
+  chmod 700 "${h}/.config" "${h}/.config/jack" "${h}/.ssh" "${h}/backups"
+  for k in bash stat grep dirname find mkdir ln readlink rm chmod mktemp mv rmdir python3; do link_tool "${b}" "${k}" || return 1; done
+  ln -s "$(command -v cat)" "${b}/real/cat"
+  write_stub "${b}/uname" 'echo Linux'
+  write_stub "${b}/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=arch\n"; else exec "${0%/*}/real/cat" "$@"; fi'
+
+  # 1. JSON escaping negative test on jack repair --action with quotes/backslashes/newlines
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" repair --auth-token="tok" --action=$'bad"act\\x\nline2' --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! printf '%s' "${out}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["status"]=="ERROR"'; then
+    fail "json_escape failed on malicious repair action: ${out}"; return 1
+  fi
+
+  # 2. Isolated install -> config/ssh/backup creation -> uninstall -> reinstall preserves all data
+  printf 'WORKSTATION_USER=alex\nWORKSTATION_HOST=ws.example.ts.net\n' > "${h}/.config/jack/config"
+  printf 'ws.example.ts.net ssh-ed25519 AAAA\n' > "${h}/.ssh/known_hosts"
+  printf 'private-key-sentinel\n' > "${h}/.ssh/id_ed25519"
+  printf 'backup-sentinel\n' > "${h}/backups/config.bak"
+  chmod 600 "${h}/.config/jack/config" "${h}/.ssh/known_hosts" "${h}/.ssh/id_ed25519" "${h}/backups/config.bak"
+  snap_cfg="$(cat "${h}/.config/jack/config")"
+  snap_kh="$(cat "${h}/.ssh/known_hosts")"
+  snap_key="$(cat "${h}/.ssh/id_ed25519")"
+  snap_bak="$(cat "${h}/backups/config.bak")"
+
+  printf 'yes\n' | env -i HOME="${h}" PATH="${b}" "${ROOT}/scripts/setup-workstation.sh" >/dev/null || { fail "reinstall test initial install failed"; return 1; }
+  [[ -L "${h}/.local/bin/jack" ]] || { fail "install symlink missing"; return 1; }
+  printf 'yes\n' | env -i HOME="${h}" PATH="${b}" "${h}/.local/bin/jack" uninstall >/dev/null || { fail "reinstall test uninstall failed"; return 1; }
+  [[ ! -e "${h}/.local/bin/jack" ]] || { fail "uninstall left symlink behind"; return 1; }
+  printf 'yes\n' | env -i HOME="${h}" PATH="${b}" "${ROOT}/scripts/setup-workstation.sh" >/dev/null || { fail "reinstall failed"; return 1; }
+  [[ -L "${h}/.local/bin/jack" ]] || { fail "reinstall symlink missing"; return 1; }
+  if [[ "$(cat "${h}/.config/jack/config")" != "${snap_cfg}" || "$(cat "${h}/.ssh/known_hosts")" != "${snap_kh}" || "$(cat "${h}/.ssh/id_ed25519")" != "${snap_key}" || "$(cat "${h}/backups/config.bak")" != "${snap_bak}" ]]; then
+    fail "install/uninstall/reinstall mutated protected user data"; return 1
+  fi
+  return 0
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -2023,6 +2065,7 @@ run_check ADD_ALIAS_UX check_add_alias_ux
 run_check DOCTOR_DIAGNOSE_REGISTRY check_doctor_diagnose_registry
 run_check SETUP_DEVICE_CENTRIC check_setup_device_centric
 run_check LINUX_WSL2_COMPAT check_linux_wsl2_compat
+run_check JSON_ESCAPE_AND_REINSTALL check_json_escaping_and_reinstall
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
