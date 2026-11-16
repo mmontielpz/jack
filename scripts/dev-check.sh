@@ -1625,6 +1625,78 @@ check_device_registry() {
   return "${rc}"
 }
 
+check_default_and_status() {
+  local h cfg b out ssh_log rc=0
+  h="$(mktemp -d "${T}/defstatus.XXXXXX")"
+  b="$(mktemp -d "${T}/def-bin.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack"
+  chmod 700 "${h}/.config" "${h}/.config/jack"
+  cfg="${h}/.config/jack/config"
+  ssh_log="${T}/def-ssh.log"
+  write_stub "${b}/ssh" 'printf "%s\n" "$*" >> "${SSH_LOG}"'
+  for k in bash stat cat grep dirname find mkdir ln readlink rm chmod mktemp mv rmdir; do link_tool "${b}" "${k}" || return 1; done
+
+  printf 'WORKSTATION_USER=alex\nWORKSTATION_HOST=ws.example.ts.net\nMAC_USER=bob\nMAC_HOST=mac.example.ts.net\nDEVICE_win-lab_USER=carol\nDEVICE_win-lab_HOST=127.0.0.1\n' > "${cfg}"
+  chmod 600 "${cfg}"
+
+  # 1. Cancel jack default -> leaves config untouched
+  if printf 'n\n' | env -i HOME="${h}" PATH="${b}" "${JACK}" default win-lab >/dev/null 2>&1; then
+    fail "cancelled jack default succeeded"; rc=1
+  fi
+  grep -q '^DEFAULT_DEVICE=' "${cfg}" && { fail "cancelled jack default modified config"; rc=1; }
+
+  # 2. Lock blocks jack default atomically
+  mkdir -p "${h}/.config/jack/.setup-lock"
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" default win-lab --yes >/dev/null 2>&1; then
+    fail "lock did not block jack default"; rc=1
+  fi
+  rmdir "${h}/.config/jack/.setup-lock"
+
+  # 3. Unknown / invalid / incomplete default fails closed
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" default missing --yes >/dev/null 2>&1; then
+    fail "unknown default accepted"; rc=1
+  fi
+  printf 'DEVICE_inc_USER=dan\n' >> "${cfg}"
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" default inc --yes >/dev/null 2>&1; then
+    fail "incomplete default accepted"; rc=1
+  fi
+
+  # 4. Consent sets DEFAULT_DEVICE=win-lab and bare jack connects to win-lab
+  if ! printf 'yes\n' | env -i HOME="${h}" PATH="${b}" "${JACK}" default win-lab >/dev/null; then
+    fail "jack default win-lab failed"; rc=1
+  fi
+  grep -q '^DEFAULT_DEVICE=win-lab$' "${cfg}" || { fail "DEFAULT_DEVICE=win-lab missing"; rc=1; }
+  [[ "$(stat -c '%a' "${cfg}")" == 600 ]] || { fail "config mode not 600"; rc=1; }
+  : > "${ssh_log}"
+  if ! env -i HOME="${h}" PATH="${b}" SSH_LOG="${ssh_log}" "${JACK}"; then
+    fail "bare jack with DEFAULT_DEVICE=win-lab failed"; rc=1
+  fi
+  [[ "$(cat "${ssh_log}")" == "carol@127.0.0.1" ]] || { fail "bare jack ssh target mismatch: $(cat "${ssh_log}")"; rc=1; }
+
+  # 5. Repeated DEFAULT_DEVICE rejected
+  printf 'DEFAULT_DEVICE=mac\n' >> "${cfg}"
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" devices >/dev/null 2>&1; then
+    fail "duplicate DEFAULT_DEVICE not rejected"; rc=1
+  fi
+
+  # 6. SSH-only status without Tailscale installed (port closed -> exit 1, direct_ssh/unavailable)
+  printf 'DEVICE_sshbox_USER=erin\nDEVICE_sshbox_HOST=127.0.0.1\n' > "${cfg}"
+  local before_snap
+  before_snap="$(cat "${cfg}")"
+  if out="$(env -i HOME="${h}" PATH="${b}" JACK_SSH_PORT=1 "${JACK}" status sshbox --json 2>&1)"; then
+    fail "closed SSH port unexpectedly returned 0: ${out}"; rc=1
+  fi
+  if ! contains "${out}" '"alias":"sshbox"' || ! contains "${out}" '"tailscale":"not_installed"' || ! contains "${out}" '"reachability":"unreachable"'; then
+    fail "unexpected sshbox closed json: ${out}"; rc=1
+  fi
+  [[ "$(cat "${cfg}")" == "${before_snap}" ]] || { fail "status modified config"; rc=1; }
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" status unknown >/dev/null 2>&1; then
+    fail "unknown alias status succeeded"; rc=1
+  fi
+  return "${rc}"
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1655,6 +1727,7 @@ run_check UPDATE_PLAN check_update_plan
 run_check INSTALL_CONSENT_RACE check_install_consent_race
 run_check ADD_DEVICE check_add_device
 run_check DEVICE_REGISTRY check_device_registry
+run_check DEFAULT_AND_STATUS check_default_and_status
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
