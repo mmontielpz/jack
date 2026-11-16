@@ -4,3 +4,6 @@ WORKSTATION_USER=alex
 WORKSTATION_HOST=workstation.example.ts.net
 MAC_USER=alex
 MAC_HOST=mac.example.ts.net
+# Optional named device profiles added by `jack add device`:
+# DEVICE_win-lab_USER=alex
+# DEVICE_win-lab_HOST=win-lab.example.ts.net

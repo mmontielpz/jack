@@ -50,6 +50,7 @@ TRIPWIRE='printf "%s\n" "${0##*/} $*" >> "${STUB_LOG:-/dev/null}"; exit 99'
 make_fixtures() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/jack-dev-check.XXXXXX")" || return 1
   mkdir "${T}/home" "${T}/expected-home" "${T}/bin-setup" "${T}/bin-discovery" "${T}/bin-doctor" "${T}/bin-install" "${T}/bin-route" "${T}/bin-notail" "${T}/bin-tail" "${T}/bin-linux" "${T}/bin-darwin" "${T}/bin-nopacman"
+  chmod 700 "${T}/home" "${T}/expected-home"
   : > "${T}/calls.log"
   : > "${T}/ts.log"
   : > "${T}/ssh.log"
@@ -93,12 +94,13 @@ exit 1'
     for n in ssh sudo brew pacman systemctl launchctl; do write_stub "${T}/${d}/${n}" "${TRIPWIRE}"; done
     write_stub "${T}/${d}/uname" 'printf "%s\n" "${FAKE_OS}"'
   done
-  ln -s "$(command -v cat)" "${T}/bin-doctor/cat-real"
+  mkdir -p "${T}/bin-doctor/real" "${T}/bin-install/real"
+  ln -s "$(command -v cat)" "${T}/bin-doctor/real/cat"
   rm -f "${T}/bin-doctor/cat"
-  write_stub "${T}/bin-doctor/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=%s\n" "${DOCTOR_DISTRO}"; else exec "${0%/*}/cat-real" "$@"; fi'
+  write_stub "${T}/bin-doctor/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=%s\n" "${DOCTOR_DISTRO}"; else exec "${0%/*}/real/cat" "$@"; fi'
   rm -f "${T}/bin-install/cat"
-  ln -s "$(command -v cat)" "${T}/bin-install/cat-real"
-  write_stub "${T}/bin-install/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=%s\n" "${DOCTOR_DISTRO}"; else exec "${0%/*}/cat-real" "$@"; fi'
+  ln -s "$(command -v cat)" "${T}/bin-install/real/cat"
+  write_stub "${T}/bin-install/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=%s\n" "${DOCTOR_DISTRO}"; else exec "${0%/*}/real/cat" "$@"; fi'
   write_stub "${T}/bin-doctor/tailscale" 'printf "%s\n" "$*" >> "${TS_LOG}"
 if [ "$1" != status ]; then exit 99; fi
 if [ "${DOCTOR_STATE}" = invalid ]; then printf "invalid status"; exit 0; fi
@@ -301,6 +303,7 @@ set_config() {
   local d
   for d in home expected-home; do
     mkdir -p "${T}/${d}/.config/jack"
+    chmod 700 "${T}/${d}/.config" "${T}/${d}/.config/jack"
     printf '%s\n' "$1" > "${T}/${d}/.config/jack/config"
   done
 }
@@ -602,6 +605,7 @@ check_setup_cancel_and_write_failure() {
   setup_reset
   # Refuse symlinks to files and parent directories without modifying their targets.
   mkdir -p "${T}/home/.config/jack" "${T}/expected-home/.config/jack"
+  chmod 700 "${T}/home/.config" "${T}/home/.config/jack" "${T}/expected-home/.config" "${T}/expected-home/.config/jack"
   printf 'unrelated\n' > "${T}/unrelated"
   ln -s "${T}/unrelated" "${T}/home/.config/jack/config"
   ln -s "${T}/unrelated" "${T}/expected-home/.config/jack/config"
@@ -1064,6 +1068,7 @@ check_lifecycle_cli() {
   local src="${T}/source with spaces" link="${T}/home/.local/bin/jack"
   local os action kind out rc ok=0 tool
   mkdir -p "${src}/bin" "${src}/scripts"
+  chmod 700 "${src}" "${src}/bin" "${src}/scripts"
   cp "${JACK}" "${src}/bin/jack"
   cp "${ROOT}/scripts/"setup-*.sh "${ROOT}/scripts/install-common.sh" "${src}/scripts/"
   for os in Darwin Linux; do
@@ -1072,6 +1077,7 @@ check_lifecycle_cli() {
     set_config "${VALID_CONFIG}"
     chmod 600 "${T}/home/.config/jack/config" "${T}/expected-home/.config/jack/config"
     mkdir -p "${T}/home/.ssh" "${T}/expected-home/.ssh"
+    chmod 700 "${T}/home/.ssh" "${T}/expected-home/.ssh"
     printf 'synthetic key\n' > "${T}/home/.ssh/key"
     printf 'synthetic profile\n' > "${T}/home/.profile"
     chmod 600 "${T}/home/.ssh/key" "${T}/home/.profile"
@@ -1180,18 +1186,20 @@ check_lifecycle_cli() {
   rm "${link}"
   # Simulate another actor replacing the link between preview and confirmation.
   ln -s "${src}/bin/jack" "${link}"
-  mv "${T}/bin-install/readlink" "${T}/readlink-real"
+  mkdir -p "${T}/real-readlink"
+  mv "${T}/bin-install/readlink" "${T}/real-readlink/readlink"
   write_stub "${T}/bin-install/readlink" 'if [ -e "$HOME/readlink-seen" ]; then
 rm "$1"; ln -s "$HOME/.profile" "$1"
 else : > "$HOME/readlink-seen"; fi
-exec "${0%/*}/../readlink-real" "$@"'
+exec "${0%/*}/../real-readlink/readlink" "$@"'
   rc=0
   out="$(run_iso "${T}/bin-install" "${src}/bin/jack" uninstall <<< yes 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]] || ! contains "${out}" 'link changed' || [[ "$(readlink "${link}")" != "${T}/home/.profile" ]]; then
     fail 'changed-link removal not refused'; ok=1
   fi
   rm "${T}/bin-install/readlink" "${link}" "${T}/home/readlink-seen"
-  mv "${T}/readlink-real" "${T}/bin-install/readlink"
+  mv "${T}/real-readlink/readlink" "${T}/bin-install/readlink"
+  rmdir "${T}/real-readlink"
   # Fail each mutable operation without invoking real installation paths.
   for tool in mkdir ln rm; do
     [[ "${tool}" != rm ]] || ln -s "${src}/bin/jack" "${link}"
@@ -1225,6 +1233,7 @@ check_update_plan() {
   real_git="$(command -v git)" || { fail 'Git required for update fixture checks'; return 1; }
   setup_reset
   mkdir -p "${src}/bin" "${src}/scripts" "${bin}"
+  chmod 700 "${src}" "${src}/bin" "${src}/scripts"
   cp "${JACK}" "${src}/bin/jack"
   cp "${ROOT}/scripts/"setup-*.sh "${ROOT}/scripts/install-common.sh" "${src}/scripts/"
   for n in dirname find readlink cat; do link_tool "${bin}" "${n}" || return 1; done
@@ -1358,6 +1367,7 @@ exec "${0%/*}/real/git" "$@"'
   done
   # Linked worktree metadata is a gitfile pointing to a shared local Git dir.
   update_fixture_git worktree add -q --detach "${T}/update-linked" "${sha}" || return 1
+  chmod -R go-w "${T}/update-linked"
   mkdir "${before}"
   cp -pR "${src}/.git" "${before}/common"
   cp -pR "${T}/update-linked" "${before}/linked"
@@ -1386,28 +1396,29 @@ check_install_consent_race() (
   cp -R "${T}/bin-install" "${race}/bin"
   tools="${race}/bin"
   link_tool "${tools}" ls || return 1
-  mv "${tools}/mkdir" "${tools}/mkdir-real"
-  mv "${tools}/ln" "${tools}/ln-real"
+  mkdir -p "${tools}/real"
+  mv "${tools}/mkdir" "${tools}/real/mkdir"
+  mv "${tools}/ln" "${tools}/real/ln"
   for kind in tailscale curl wget; do write_stub "${tools}/${kind}" "${TRIPWIRE}"; done
   # Both wrappers use the same injector. Only the selected stage changes the
   # test-owned destination; injection primitives bypass the wrappers themselves.
   local injector='
 base="${0%/*}"
 tool="${0##*/}"
-if [ "$tool" = mkdir ]; then "$base/mkdir-real" "$@" || exit 1; fi
+if [ "$tool" = mkdir ]; then "$base/real/mkdir" "$@" || exit 1; fi
 if [ "$(cat "$base/../stage")" = "$tool" ] && [ ! -e "$base/../injected" ]; then
   dest="$HOME/.local/bin/jack"
   case "$(cat "$base/../kind")" in
-    directory) "$base/mkdir-real" "$dest"; printf "sentinel\n" > "$dest/owner-data" ;;
-    directory-link) "$base/ln-real" -s "$base/../target-directory" "$dest" ;;
+    directory) "$base/real/mkdir" "$dest"; printf "sentinel\n" > "$dest/owner-data" ;;
+    directory-link) "$base/real/ln" -s "$base/../target-directory" "$dest" ;;
     file) printf "occupied fixture\n" > "$dest" ;;
-    unrelated-link) "$base/ln-real" -s "$base/../unrelated-file" "$dest" ;;
-    dangling-link) "$base/ln-real" -s "$base/../missing-file" "$dest" ;;
+    unrelated-link) "$base/real/ln" -s "$base/../unrelated-file" "$dest" ;;
+    dangling-link) "$base/real/ln" -s "$base/../missing-file" "$dest" ;;
   esac
   TZ=UTC0 LC_ALL=C "$base/ls" -ldin "$dest" > "$base/../occupied-metadata"
   : > "$base/../injected"
 fi
-if [ "$tool" = ln ]; then exec "$base/ln-real" "$@"; fi
+if [ "$tool" = ln ]; then exec "$base/real/ln" "$@"; fi
 '
   write_stub "${tools}/mkdir" "${injector}"
   write_stub "${tools}/ln" "${injector}"
@@ -1424,6 +1435,7 @@ if [ "$tool" = ln ]; then exec "$base/ln-real" "$@"; fi
           label="${os}/${route}/${stage}/${kind}"
           home="${race}/home-${os}-${route}-${stage}-${kind}"
           mkdir -p "${home}/.local/bin" "${home}/.config/jack" "${home}/.ssh"
+          chmod 700 "${home}" "${home}/.local" "${home}/.local/bin" "${home}/.config" "${home}/.config/jack" "${home}/.ssh"
           printf '%s\n' "${VALID_CONFIG}" > "${home}/.config/jack/config"
           printf 'synthetic key\n' > "${home}/.ssh/key"
           printf 'synthetic profile\n' > "${home}/.profile"
@@ -1513,6 +1525,53 @@ if ! make_fixtures; then
   exit 1
 fi
 
+check_add_device() {
+  local h cfg rc=0
+  h="$(mktemp -d "${T}/add-device.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack"
+  chmod 700 "${h}/.config" "${h}/.config/jack"
+  cfg="${h}/.config/jack/config"
+  printf 'WORKSTATION_USER=alex\nWORKSTATION_HOST=ws.example.ts.net\n' > "${cfg}"
+
+  # 1. Valid profile creation + preservation of existing config
+  if ! printf 'win-lab\nalex\n100.64.0.10\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null; then
+    fail "valid jack add device failed"; rc=1
+  fi
+  grep -q '^WORKSTATION_USER=alex$' "${cfg}" || { fail "lost existing WORKSTATION_USER"; rc=1; }
+  grep -q '^DEVICE_win-lab_USER=alex$' "${cfg}" || { fail "missing DEVICE_win-lab_USER"; rc=1; }
+  grep -q '^DEVICE_win-lab_HOST=100.64.0.10$' "${cfg}" || { fail "missing DEVICE_win-lab_HOST"; rc=1; }
+
+  # 2. Duplicate alias rejection (must not overwrite)
+  if printf 'win-lab\nbob\n100.64.0.99\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "duplicate alias was not rejected"; rc=1
+  fi
+  grep -q '^DEVICE_win-lab_HOST=100.64.0.10$' "${cfg}" || { fail "duplicate alias overwrote config"; rc=1; }
+
+  # 3. Invalid inputs (malformed alias, reserved alias, bad user, bad host)
+  if printf 'Bad Alias\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "malformed alias accepted"; rc=1
+  fi
+  if printf 'workstation\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "reserved alias workstation accepted"; rc=1
+  fi
+  if printf 'linux-box\nbad;user\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "malformed username accepted"; rc=1
+  fi
+  if printf 'linux-box\nalex\n999.0.0.1\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "malformed IP/host accepted"; rc=1
+  fi
+
+  # 4. Atomic persistence failure when lock exists preserves config
+  mkdir -p "${h}/.config/jack/.setup-lock"
+  if printf 'mac-lab\nalex\nmac.example.ts.net\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "lock did not block concurrent save"; rc=1
+  fi
+  rmdir "${h}/.config/jack/.setup-lock"
+  grep -q 'DEVICE_mac-lab_USER' "${cfg}" && { fail "failed atomic save modified config"; rc=1; }
+  return "${rc}"
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1541,6 +1600,7 @@ run_check INSTALLER_REFUSAL check_installer_refusal
 run_check LIFECYCLE_CLI check_lifecycle_cli
 run_check UPDATE_PLAN check_update_plan
 run_check INSTALL_CONSENT_RACE check_install_consent_race
+run_check ADD_DEVICE check_add_device
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046

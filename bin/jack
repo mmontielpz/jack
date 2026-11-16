@@ -15,6 +15,7 @@ WORKSTATION_USER=""
 WORKSTATION_HOST=""
 MAC_USER=""
 MAC_HOST=""
+DEVICE_LINES=()
 
 config_error() {
   echo "jack: $* (${CONFIG_FILE}). See config.example and jack --help." >&2
@@ -53,8 +54,20 @@ valid_host() {
   done
 }
 
+valid_device_alias() {
+  local LC_ALL=C alias="$1"
+  [[ ${#alias} -ge 1 && ${#alias} -le 32 ]] || return 1
+  [[ "${alias}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || return 1
+  [[ "${alias}" != "workstation" && "${alias}" != "mac" ]] || return 1
+}
+
 load_config() {
-  local line key value seen="|" number=0 nul
+  local line key value seen="|" number=0 nul alias
+  WORKSTATION_USER=""
+  WORKSTATION_HOST=""
+  MAC_USER=""
+  MAC_HOST=""
+  DEVICE_LINES=()
   [[ -f "${CONFIG_FILE}" && -r "${CONFIG_FILE}" ]] || {
     config_error "configuration file missing or unreadable; run jack setup"; return 1;
   }
@@ -71,6 +84,16 @@ load_config() {
     value="${line#*=}"
     case "${key}" in
       WORKSTATION_USER|WORKSTATION_HOST|MAC_USER|MAC_HOST) ;;
+      DEVICE_*_USER)
+        alias="${key#DEVICE_}"
+        alias="${alias%_USER}"
+        valid_device_alias "${alias}" || { config_error "invalid device alias at line ${number}"; return 1; }
+        ;;
+      DEVICE_*_HOST)
+        alias="${key#DEVICE_}"
+        alias="${alias%_HOST}"
+        valid_device_alias "${alias}" || { config_error "invalid device alias at line ${number}"; return 1; }
+        ;;
       *) config_error "unsupported key at line ${number}"; return 1 ;;
     esac
     case "${seen}" in
@@ -87,6 +110,7 @@ load_config() {
       WORKSTATION_HOST) WORKSTATION_HOST="${value}" ;;
       MAC_USER) MAC_USER="${value}" ;;
       MAC_HOST) MAC_HOST="${value}" ;;
+      DEVICE_*_USER|DEVICE_*_HOST) DEVICE_LINES+=("${key}=${value}") ;;
     esac
   done < "${CONFIG_FILE}"
 }
@@ -110,6 +134,7 @@ Usage:
   jack --version Show version (no configuration or network access)
   jack --help   Show help
   jack setup    Guided destination configuration (see jack setup --help)
+  jack add device Register an authorized remote device profile
   jack update   Read-only, offline source update plan (see jack update --help)
   jack install  Install this checkout link with consent
   jack uninstall Remove only this checkout link with consent
@@ -484,10 +509,14 @@ setup_snapshot() {
 }
 
 setup_preview() {
+  local line
   if [[ -n "${WORKSTATION_USER}" ]]; then printf 'WORKSTATION_USER=%s\n' "${WORKSTATION_USER}" || return 1; fi
   if [[ -n "${WORKSTATION_HOST}" ]]; then printf 'WORKSTATION_HOST=%s\n' "${WORKSTATION_HOST}" || return 1; fi
   if [[ -n "${MAC_USER}" ]]; then printf 'MAC_USER=%s\n' "${MAC_USER}" || return 1; fi
   if [[ -n "${MAC_HOST}" ]]; then printf 'MAC_HOST=%s\n' "${MAC_HOST}" || return 1; fi
+  for line in "${DEVICE_LINES[@]+"${DEVICE_LINES[@]}"}"; do
+    printf '%s\n' "${line}" || return 1
+  done
   return 0
 }
 
@@ -534,6 +563,70 @@ setup_save() (
 setup_read() {
   printf '%s' "$1"
   IFS= read -r answer || { setup_error 'input ended; cancelled without saving'; return 1; }
+}
+
+add_device_usage() {
+  cat <<'EOF'
+Usage:
+  jack add device
+  jack add device --help
+
+Interactively validates and appends a DEVICE_<alias>_USER and
+DEVICE_<alias>_HOST entry to $HOME/.config/jack/config without overwriting
+existing profiles.
+EOF
+}
+
+cmd_add_device() {
+  if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+    [[ $# -eq 1 ]] || { echo "jack add device: too many arguments" >&2; return 1; }
+    add_device_usage
+    return 0
+  fi
+  [[ $# -eq 0 ]] || { echo "jack add device: unexpected argument: $1" >&2; add_device_usage >&2; return 1; }
+
+  local original answer dev_alias dev_user dev_host line
+  setup_paths_safe || return 1
+  original="$(setup_snapshot)" || return 1
+  WORKSTATION_USER=""
+  WORKSTATION_HOST=""
+  MAC_USER=""
+  MAC_HOST=""
+  DEVICE_LINES=()
+  if [[ -e "${CONFIG_FILE}" ]]; then
+    load_config || return 1
+  fi
+
+  setup_read "Device alias (lowercase, e.g. win-lab): " || return 1
+  dev_alias="${answer}"
+  valid_device_alias "${dev_alias}" || {
+    echo "jack add device: invalid device alias '${dev_alias}'; use 1-32 lowercase letters, digits, '-' or '_' (not workstation or mac)" >&2
+    return 1
+  }
+  for line in "${DEVICE_LINES[@]+"${DEVICE_LINES[@]}"}"; do
+    if [[ "${line}" == "DEVICE_${dev_alias}_USER="* || "${line}" == "DEVICE_${dev_alias}_HOST="* ]]; then
+      echo "jack add device: device alias '${dev_alias}' already exists; refusing to overwrite" >&2
+      return 1
+    fi
+  done
+
+  setup_read "Remote SSH username: " || return 1
+  dev_user="${answer}"
+  valid_user "${dev_user}" || {
+    echo "jack add device: invalid SSH username '${dev_user}'" >&2
+    return 1
+  }
+
+  setup_read "Remote hostname or Tailscale IP: " || return 1
+  dev_host="${answer}"
+  valid_host "${dev_host}" || {
+    echo "jack add device: invalid hostname or Tailscale IP '${dev_host}'" >&2
+    return 1
+  }
+
+  DEVICE_LINES+=("DEVICE_${dev_alias}_USER=${dev_user}" "DEVICE_${dev_alias}_HOST=${dev_host}")
+  setup_save || return 1
+  printf "Added device '%s' (%s@%s) to %s\n" "${dev_alias}" "${dev_user}" "${dev_host}" "${CONFIG_FILE}"
 }
 
 # Optional discovery only. -I ignores Python environment/user import paths.
@@ -1033,6 +1126,14 @@ main() {
     shift
     cmd_setup "$@"
     return
+  fi
+  if [[ "${1:-}" == add ]]; then
+    shift
+    case "${1:-}" in
+      device) shift; cmd_add_device "$@"; return ;;
+      --help|-h|"") add_device_usage; [[ -n "${1:-}" ]] && return 0 || return 1 ;;
+      *) echo "jack add: unknown subcommand: $1" >&2; add_device_usage >&2; return 1 ;;
+    esac
   fi
 
   case "${1:-}" in
