@@ -1,30 +1,30 @@
-# JACK Easy Pairing — Identity and Trust Model (`JACK-EP-001`)
+# JACK Easy Pairing — Identity, Key Storage & Recovery (`JACK-EP-001A`)
 
-> **Classification:** `PROPOSAL` (Standard cryptographic primitives; no custom crypto)
+> **Classification:** `PROPOSAL` (G5 Key Storage & Recovery Hardening)
 
-## 1. Per-Installation Device Identity
+## 1. Key Generation & Lifecycle
+- **Algorithm:** Ed25519 (`ed25519-dalek` with OS CSPRNG `OsRng`).
+- **Device ID:** `jack:ed25519:<base32-first-16-bytes-of-SHA256(spki_der)>`.
+- **Rotation:** Initiated only over an existing authenticated mTLS session with a dual-signed `RotateKeyProof` (signed by both `old_sk` and `new_sk`).
+- **Destruction:** Explicit key deletion zeroizes in-memory key material and removes the OS keystore entry.
 
-- Every JACK installation (Client or Host) generates one **Ed25519** signing keypair on first launch.
-- **Device ID:** `jack:ed25519:<base32-first-16-bytes-of-SHA256(pubkey)>` (human-readable short ID) paired with the full 32-byte Ed25519 public key.
-- **Mutual Authentication:** Every post-pairing TLS 1.3 connection uses mutual TLS (mTLS) with self-signed X.509 certificates wrapping the Ed25519 public key (pinned directly by public key, not public CAs).
-- **Ephemeral Session Keys:** Provided by TLS 1.3 (`ECDHE` / `X25519` forward-secret key exchange).
-- **Replay Protection:** Pairing messages include a 128-bit random nonce, monotonic sequence/timestamp window, and single-use invitation ID.
+## 2. Platform Key Storage & Fail-Closed Fallbacks (G5)
 
-## 2. Platform Key Storage (`PROPOSAL`)
+### Linux
+- **Primary:** D-Bus Secret Service (`libsecret` / GNOME Keyring / KWallet) via `keyring` crate.
+- **Headless Linux Fallback (Fail-Closed by Default):**
+  - **No silent plaintext private-key fallback!** If Secret Service is unavailable, JACK **fails closed** (`ERR_KEYSTORE_UNAVAILABLE`) and explains how to start a keyring or explicitly opt into a passphrase-protected keyfile.
+  - **Explicit Opt-In Passphrase Keyfile:** User supplies a passphrase; private key is encrypted with **Argon2id** (memory-hard KDF) + **ChaCha20-Poly1305** (`0600` file, symlink-refused, owner-UID checked). Never uses a blank or hardcoded passphrase.
 
-| Platform | Primary Storage | Fallback / Caveat (`DECISION_REQUIRED`) |
-| --- | --- | --- |
-| **Linux** | Secret Service (`libsecret` / GNOME Keyring / KWallet) via `keyring` crate | Headless/minimal Linux without D-Bus Secret Service: file encrypted with user-supplied passphrase or OS-protected `0600` keyfile with explicit risk warning (`ASSUMPTION`). |
-| **Windows** | Windows Credential Manager / CNG DPAPI (`CryptProtectData` scoped to current Windows user) | Protected per-user without requiring admin privileges. |
-| **macOS (future)** | macOS Keychain (`SecItemAdd` / Secure Enclave where available) | Deferred to post-MVP macOS qualification. |
+### Windows
+- **Primary:** Windows DPAPI (`CryptProtectData` with `CRYPTPROTECT_UI_FORBIDDEN`) scoped strictly to the current Windows user account (`LOCAL_MACHINE` scope is prohibited).
+- **Failure:** If DPAPI fails, fail closed (`ERR_KEYSTORE_UNAVAILABLE`) without writing plaintext keys.
 
-## 3. Lifecycle & Recovery Scenarios
+### macOS (Future)
+- macOS Keychain (`SecItemAdd`), deferred to post-MVP qualification.
 
-- **Explicit Trust Establishment:** Trust is never implicit. A peer public key is added to `trusted_peers.json` (integrity-protected, `0600`) ONLY after successful cryptographic pairing AND explicit human confirmation.
-- **Key Rotation:** A paired device may present a rotation proof signed by *both* its old and new Ed25519 keys over an already-authenticated mTLS session; otherwise re-pairing is required.
-- **Device Revocation:** Removing a peer from `trusted_peers` immediately rejects all new mTLS handshakes and terminates active sessions for that `Device ID`.
-- **Stolen Device Key:** Owner revokes the compromised `Device ID` on the surviving peer; Host invalidates all grants bound to that key.
-- **Cloned Machine:** Two machines sharing a cloned key will collide or race; if detected or suspected, owner revokes the `Device ID` and re-pairs each physical machine cleanly.
-- **JACK Reinstalled:** Reinstallation without key backup generates a **new** Ed25519 identity; old trust entries are no longer valid and the device must be re-paired (prevents silent impersonation).
-- **Lost Trusted Device:** Revoke the lost device's `Device ID` on the Host/Client immediately.
-- **Corrupted Trust Record:** Fail closed! Refuse connections for corrupted records, preserve a `.corrupt.<ts>` backup for inspection, and prompt the user to re-pair.
+## 3. Recovery Scenarios
+- **Reinstallation:** Generates a new Ed25519 identity; old trust records are invalidated; peer must re-pair.
+- **Device Cloning:** Cloned keys violate uniqueness; if detected or suspected, owner revokes the `Device ID` on peers and re-pairs each physical machine.
+- **Lost Device:** Revoke the lost `Device ID` in **Device Permissions**; all grants terminate immediately.
+- **Corrupted Trust / Key State:** Fail closed (`ERR_TRUST_STATE_CORRUPT`), preserve `.corrupt.<ts>` backup, refuse connections until re-paired.

@@ -18,7 +18,8 @@
    +-------------------------------------------------------+
    ```
 2. **Add Device (Client)**
-   - Primary: `Scan QR Code` / `Enter Pairing Code` input (`XXXX-XXXX`).
+   - Primary: `Enter Pairing Code` input (`XXXX-XXXX`, Code-first MVP per `ADR-006`).
+   - Alternate: `Scan or Paste QR Invitation`.
    - Secondary link at bottom: `Advanced: Manual SSH setup`.
 3. **Share This Device (Host)**
    - Primary CTA: `Generate Pairing Code`. Shows clear status (`Not sharing` -> `Waiting for pairing`).

@@ -11,8 +11,8 @@
 
 | Phase | Scope | Measurable Exit Criteria |
 | --- | --- | --- |
-| **EP-002** | **Identity & Local Pairing** | Ed25519 keygen + OS keystore (`libsecret`/DPAPI), QR payload + 8-char code + SPAKE2 + 6-digit SAS, 11-state machine, rate limiting, unit & MITM fixture tests PASS. |
-| **EP-003** | **Host & Session Authorization** | TLS 1.3 mTLS Host listener, human approval IPC, scoped capability enforcement (`status.read`, `workspace.read`), expiry, and instant revocation tests PASS. |
+| **EP-002** | **Identity & Local Pairing** | Two isolated local processes (`127.0.0.1`), Ed25519 keygen + OS keystore (`libsecret`/DPAPI) + fail-closed fallback, 8-char code + QR URI + `RFC 9266` `tls_cb` + SPAKE2 + 6-digit SAS, 11-state machine, `status.read`-only capability (`ADR-008`), negative & MITM fixture tests PASS. |
+| **EP-003** | **Host & Session Authorization** | TLS 1.3 mTLS Host listener, human approval IPC, `workspace.read` & scoped capability enforcement, expiry, and instant revocation tests PASS. |
 | **EP-004** | **QR/Code UX** | 9-screen minimal UI in `desktop/` (with Manual SSH under Advanced), keyboard accessibility, zero raw SSH in primary path, Vitest + Chromium screenshot qualification PASS. |
 | **EP-005** | **Linux-Windows Qualification** | Real Linux Client <-> Windows Host pairing over LAN & Tailscale; Windows firewall UX documented; `NOT_TESTED` items closed or explicitly tracked. |
 | **EP-006** | **Cross-Network Connectivity** | Optional end-to-end encrypted relay / coordination service for separate-NAT peers without Tailscale; relay compromise threat review PASS. |

@@ -1,35 +1,26 @@
-# JACK Easy Pairing — Authorization & Session Lifecycle (`JACK-EP-001`)
+# JACK Easy Pairing — Authorization & Session Lifecycle (`JACK-EP-001A`)
 
-> **Classification:** `PROPOSAL`
+> **Classification:** `PROPOSAL` (G4 Session & Revocation Hardening)
 
-## 1. Four-Layer Separation (G5)
+## 1. Four-Layer Boundary Model
 
-1. **Device Identity:** Long-lived per-installation Ed25519 keypair (`Device ID`). Proves *who* a machine is. Never grants access by itself.
-2. **Device Trust:** Explicit record in `trusted_peers.json` binding a `Device ID` + public key + display name after human-confirmed pairing.
-3. **Capability Authorization (Grant):** Scoped, time-bound policy attached to a trusted `Device ID` on the Host (e.g., `["status.read", "workspace.read"]`).
-4. **Session Authorization:** Short-lived active mTLS connection bound to a specific Grant ID, monitored against expiration and revocation.
+1. **Device Identity:** Ed25519 keypair (`Device ID`). Authenticates machine identity only.
+2. **Device Trust:** Explicit peer public-key entry in `trusted_peers.json` (`0600`, symlink-refused, owner-UID verified).
+3. **Capability Grant:** Least-privilege scope list + `expires_at` bound to a specific `Device ID` on the Host.
+4. **Active Session:** Ephemeral TLS 1.3 mTLS connection bound to a Grant ID, checked before every RPC.
 
-## 2. Least-Privilege Default Capabilities
+## 2. EP-002 Capability Restriction (G4)
 
-- Pairing **never** grants unrestricted remote shell, full filesystem write, or unattended background access by default.
-- **Default MVP Scopes:**
-  - `status.read` (device health/OS info)
-  - `workspace.read` (read-only listing/files inside an explicitly shared workspace directory)
-  - `exec.approved` (future: run only pre-approved commands, never arbitrary shell on initial pairing)
+- **EP-002 Strict Scope:** Only **`status.read`** (read-only Host health, OS label, and JACK version) is permitted in `EP-002`!
+- **Deferred to EP-003+:** `workspace.read`, file listing, and approved remote command execution are **prohibited** in `EP-002`.
 
-## 3. User-Facing Duration Options
+## 3. Expiration, Revocation & Fail-Closed Enforcement
 
-| Option | Behavior | Trust Retained? | Reconnection |
-| --- | --- | --- | --- |
-| **This session only** | Grant expires immediately when the active connection closes | Optional (or ephemeral) | Requires fresh Host approval |
-| **One hour** | Grant valid for 3600s | Yes (1h) | Automatic reconnect within 1h |
-| **Twenty-four hours** | Grant valid for 86400s | Yes (24h) | Automatic reconnect within 24h |
-| **Remember this device** | Persistent `Device Trust` with scoped capabilities (still revocable anytime) | Yes | Automatic reconnect while unrevoked |
-| **Unattended access (future)** | **Deferred** — requires explicit opt-in, background service, and separate OS consent | Explicit opt-in | Background |
-
-## 4. Expiration, Revocation & Audit
-
-- **Trust & Session Expiration:** Host checks `now < grant.expires_at` on every capability RPC and periodically on active sessions; expired sessions receive `ERR_GRANT_EXPIRED` and close cleanly.
-- **Revocation & Active-Session Termination:** Clicking **Revoke** on Host immediately removes the peer from `trusted_peers.json`, marks all grants revoked, and closes all active TLS streams for that `Device ID`.
-- **Permission Changes:** Host owner can downgrade or edit scopes in **Device Permissions**; changes take effect immediately on active sessions.
-- **Audit Events:** Host logs structured local JSONL events (no secrets/tokens): `PAIR_INVITE_CREATED`, `PAIR_REQUEST_RECEIVED`, `PAIR_APPROVED`, `PAIR_DENIED`, `SESSION_STARTED`, `CAPABILITY_INVOKED`, `SESSION_ENDED`, `TRUST_REVOKED`.
+- **Enforcement Points:** Host checks `trusted_peers` + `grant.expires_at` + `!grant.revoked` at:
+  1. mTLS handshake acceptance,
+  2. Every incoming capability RPC,
+  3. Periodic session-expiry sweep (every 10s on active streams).
+- **Active-Session Termination:** Revoking a peer or grant immediately sets `revoked = true` in memory and on disk, sends `ERR_TRUST_REVOKED`, and closes the TLS stream.
+- **Offline Revocation:** Since grants are enforced locally by the Host, revoking a Client while the Client is offline guarantees immediate rejection if the Client later attempts to reconnect.
+- **Fail-Closed Authorization State:** If `trusted_peers.json` or `grants.json` is missing, unreadable, symlinked, wrong-UID, or invalid JSON, Host **denies all connections and RPCs** (`ERR_AUTH_STATE_UNAVAILABLE`).
+- **Unattended Access:** Disabled by default; deferred to post-MVP with explicit OS service consent.
