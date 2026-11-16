@@ -11,39 +11,41 @@ Stable release: [v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0)
 - Configure destinations with guided `jack setup` (direct SSH or optional Tailscale), `jack add <alias>`, or a plain configuration file.
 - Diagnose prerequisites and reachability with `jack doctor`, `jack diagnose`, and `jack status [alias]`.
 
-Supported client installation targets: **macOS** (primary), **Arch Linux / CachyOS**, and **Ubuntu Linux (including Ubuntu on WSL2)**.
-Other Linux distributions and native Windows are not supported client installation paths (Windows hosts can be registered as remote SSH/Tailscale destinations).
+Supported client installation targets for v0.2.0: **Arch Linux / CachyOS** and **Ubuntu Linux (including Ubuntu on WSL2)**.
+**macOS** native remains deferred and unqualified for v0.2.0; native Windows and other Linux distributions are not supported client installation paths (Windows hosts can be registered as remote SSH/Tailscale destinations).
 JACK provides terminal access, not remote desktop. It relies on your existing
 OpenSSH and optional Tailscale authentication and authorization.
 
-## Quick Start
+## Quick Start (Arch / CachyOS)
 
-Install Bash and an OpenSSH client through your normal platform workflow (and
-optionally Tailscale if you connect over a tailnet). Git is needed for the source
-checkout. Python 3 is optional for Tailscale device discovery; manual setup and
-direct SSH work without it.
+Install Bash, Git, and an OpenSSH client through your normal platform workflow (`pacman -S bash git openssh`), and optionally Tailscale if you connect over a tailnet. Python 3 is optional for Tailscale peer discovery; manual setup and direct SSH work without it.
 
 ```bash
-git clone --branch v0.1.0 --single-branch https://github.com/mmontielpz/jack
+# 1. Clone and install user-level symlink (~/.local/bin/jack)
+git clone https://github.com/mmontielpz/jack
 cd jack
-./bin/jack doctor
-./scripts/setup-macos.sh        # macOS: consented user-level CLI link
-# On Arch/CachyOS, use ./scripts/setup-workstation.sh instead.
-export PATH="$HOME/.local/bin:$PATH"  # current Bash/zsh session
+./scripts/setup-workstation.sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# 2. Verify CLI and prerequisites
 jack --version
 jack doctor
-jack setup
-jack --status
-jack       # primary remote destination (workstation)
-jack mac   # configured Mac
+
+# 3. Register your first device (direct SSH or Tailscale) and set default
+jack add lab                  # interactive preview + confirmation
+# or non-interactive: jack add lab --non-interactive --yes --user <user> --host <host>
+jack devices
+jack default lab --yes
+
+# 4. Check status and connect
+jack status lab
+jack                          # connects to default device (or: jack connect lab)
+
+# 5. Uninstall only the CLI symlink (preserves config, keys, known_hosts, backups)
+jack uninstall
 ```
 
-This clones the published tag in detached HEAD state. Later development on `main`
-is separate from the release. Keep the checkout: the installed command links to
-its `bin/jack`. Installers ask
-before creating the link; they do not install packages, enable services, edit
-profiles, or configure SSH. Doctor reports missing prerequisites and configuration
-with next steps; an initial failure before setup is expected.
+Keep the checkout in place while installed: `~/.local/bin/jack` is a symlink to `bin/jack`. Installers ask for `yes` before creating or removing the symlink; they do not install packages, enable services, or modify SSH keys/profiles. **Uninstall** removes only the `~/.local/bin/jack` symlink for this checkout and leaves `$HOME/.config/jack/config`, `~/.ssh/known_hosts`, SSH keys, and backups untouched.
 
 Setup lets you configure either destination or both, shows a preview, and saves
 only with explicit consent. Optional discovery recommends Linux peers for the

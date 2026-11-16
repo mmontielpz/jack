@@ -27,6 +27,16 @@ config_error() {
   return 1
 }
 
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "${s}"
+}
+
 valid_user() {
   local LC_ALL=C
   [[ ${#1} -le 64 && "$1" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]
@@ -1767,7 +1777,7 @@ cmd_repair() {
       ;;
     *)
       if [[ "${as_json}" -eq 1 ]]; then
-        printf '{"subsystem":"jack","tool":"repair","status":"ERROR","error":"Unknown repair action: %s"}\n' "${action}"
+        printf '{"subsystem":"jack","tool":"repair","status":"ERROR","error":"Unknown repair action: %s"}\n' "$(json_escape "${action}")"
       else
         echo "jack repair: unknown action: ${action}" >&2
       fi
@@ -1778,7 +1788,7 @@ cmd_repair() {
   # Independent Post-Repair Verification
   if [[ "${as_json}" -eq 1 ]]; then
     printf '{"subsystem":"jack","tool":"repair","action":"%s","status":"%s","post_repair_verification":{"status":"VERIFIED","read_only_restored":true}}\n' \
-      "${action}" "${repair_status}"
+      "$(json_escape "${action}")" "${repair_status}"
   else
     printf 'jack repair: %s [%s] - Post-repair verification: VERIFIED (read-only restored)\n' "${action}" "${repair_status}"
   fi
