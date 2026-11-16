@@ -1513,6 +1513,53 @@ if ! make_fixtures; then
   exit 1
 fi
 
+check_add_device() {
+  local h cfg rc=0
+  h="$(mktemp -d "${T}/add-device.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack"
+  chmod 700 "${h}/.config" "${h}/.config/jack"
+  cfg="${h}/.config/jack/config"
+  printf 'WORKSTATION_USER=alex\nWORKSTATION_HOST=ws.example.ts.net\n' > "${cfg}"
+
+  # 1. Valid profile creation + preservation of existing config
+  if ! printf 'win-lab\nalex\n100.64.0.10\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null; then
+    fail "valid jack add device failed"; rc=1
+  fi
+  grep -q '^WORKSTATION_USER=alex$' "${cfg}" || { fail "lost existing WORKSTATION_USER"; rc=1; }
+  grep -q '^DEVICE_win-lab_USER=alex$' "${cfg}" || { fail "missing DEVICE_win-lab_USER"; rc=1; }
+  grep -q '^DEVICE_win-lab_HOST=100.64.0.10$' "${cfg}" || { fail "missing DEVICE_win-lab_HOST"; rc=1; }
+
+  # 2. Duplicate alias rejection (must not overwrite)
+  if printf 'win-lab\nbob\n100.64.0.99\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "duplicate alias was not rejected"; rc=1
+  fi
+  grep -q '^DEVICE_win-lab_HOST=100.64.0.10$' "${cfg}" || { fail "duplicate alias overwrote config"; rc=1; }
+
+  # 3. Invalid inputs (malformed alias, reserved alias, bad user, bad host)
+  if printf 'Bad Alias\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "malformed alias accepted"; rc=1
+  fi
+  if printf 'workstation\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "reserved alias workstation accepted"; rc=1
+  fi
+  if printf 'linux-box\nbad;user\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "malformed username accepted"; rc=1
+  fi
+  if printf 'linux-box\nalex\n999.0.0.1\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "malformed IP/host accepted"; rc=1
+  fi
+
+  # 4. Atomic persistence failure when lock exists preserves config
+  mkdir -p "${h}/.config/jack/.setup-lock"
+  if printf 'mac-lab\nalex\nmac.example.ts.net\n' | env -i HOME="${h}" PATH="/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "lock did not block concurrent save"; rc=1
+  fi
+  rmdir "${h}/.config/jack/.setup-lock"
+  grep -q 'DEVICE_mac-lab_USER' "${cfg}" && { fail "failed atomic save modified config"; rc=1; }
+  return "${rc}"
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1541,6 +1588,7 @@ run_check INSTALLER_REFUSAL check_installer_refusal
 run_check LIFECYCLE_CLI check_lifecycle_cli
 run_check UPDATE_PLAN check_update_plan
 run_check INSTALL_CONSENT_RACE check_install_consent_race
+run_check ADD_DEVICE check_add_device
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
