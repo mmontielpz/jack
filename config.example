@@ -1,9 +1,12 @@
-# Illustrative values only: replace with your own SSH users and tailnet hosts.
-# Omit both keys for a destination you do not use. No quotes or inline comments.
+# Illustrative values only: replace with your own SSH users and hosts.
+# Omit keys for destinations you do not use. No quotes or inline comments.
+# Named device profiles added by `jack add <alias>` or `jack setup`:
+# DEVICE_win-lab_USER=alex
+# DEVICE_win-lab_HOST=192.168.1.50
+# Optional default device for bare `jack` (set via `jack default <alias>`):
+# DEFAULT_DEVICE=win-lab
+# Legacy workstation/mac profiles (over Tailscale):
 WORKSTATION_USER=alex
 WORKSTATION_HOST=workstation.example.ts.net
 MAC_USER=alex
 MAC_HOST=mac.example.ts.net
-# Optional named device profiles added by `jack add device`:
-# DEVICE_win-lab_USER=alex
-# DEVICE_win-lab_HOST=win-lab.example.ts.net

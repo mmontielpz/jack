@@ -1853,6 +1853,71 @@ check_doctor_diagnose_registry() {
   return 0
 }
 
+check_setup_device_centric() {
+  local h cfg b out rc=0 snap
+  h="$(mktemp -d "${T}/setupdev.XXXXXX")"
+  b="$(mktemp -d "${T}/setupdev-bin.XXXXXX")"
+  chmod 700 "${h}"
+  cfg="${h}/.config/jack/config"
+  for k in bash stat cat grep dirname find mkdir ln readlink rm chmod mktemp mv rmdir; do link_tool "${b}" "${k}" || return 1; done
+
+  # 1. Fresh direct-SSH setup without Tailscale CLI, selecting DEFAULT_DEVICE
+  out="$(printf 'device\nwin-lab\nssh\n192.168.1.50\nalex\ny\nyes\n' | env -i HOME="${h}" PATH="${b}" "${JACK}" setup 2>&1)" || {
+    fail "fresh direct-SSH setup failed: ${out}"; return 1
+  }
+  if ! contains "${out}" 'Next: jack status win-lab, then jack.' || ! grep -q '^DEFAULT_DEVICE=win-lab$' "${cfg}" || ! grep -q '^DEVICE_win-lab_HOST=192.168.1.50$' "${cfg}"; then
+    fail "fresh direct-SSH setup output/config mismatch: ${out}"; return 1
+  fi
+  [[ "$(stat -c '%a' "${cfg}")" == 600 ]] || { fail "setup config mode not 600"; return 1; }
+
+  # 2. Cancellation preserves existing config
+  snap="$(cat "${cfg}")"
+  if printf 'device\nmac-lab\nssh\n192.168.1.51\nbob\nn\nno\n' | env -i HOME="${h}" PATH="${b}" "${JACK}" setup >/dev/null 2>&1; then
+    fail "cancelled setup succeeded"; return 1
+  fi
+  [[ "$(cat "${cfg}")" == "${snap}" ]] || { fail "cancelled setup modified config"; return 1; }
+
+  # 3. Existing profiles preserved + non-interactive --device/--default
+  if ! env -i HOME="${h}" PATH="${b}" "${JACK}" setup --non-interactive --yes --device box2 --user carol --host 10.0.0.2 --default box2 >/dev/null; then
+    fail "non-interactive setup --device failed"; return 1
+  fi
+  if ! grep -q '^DEVICE_win-lab_USER=alex$' "${cfg}" || ! grep -q '^DEVICE_box2_HOST=10.0.0.2$' "${cfg}" || ! grep -q '^DEFAULT_DEVICE=box2$' "${cfg}"; then
+    fail "non-interactive setup --device did not preserve/update config"; return 1
+  fi
+
+  # 4. Duplicate alias, reserved alias, malformed user/host, invalid --default, incomplete --device fail closed
+  for bad in \
+    "--non-interactive --yes --device win-lab --user eve --host 10.0.0.3" \
+    "--non-interactive --yes --device workstation --user eve --host 10.0.0.3" \
+    "--non-interactive --yes --device box3 --user bad;user --host 10.0.0.3" \
+    "--non-interactive --yes --device box3 --user eve --host 999.0.0.1" \
+    "--non-interactive --yes --default missing" \
+    "--non-interactive --yes --device box3 --user eve"; do
+    # shellcheck disable=SC2086
+    if env -i HOME="${h}" PATH="${b}" "${JACK}" setup ${bad} >/dev/null 2>&1; then
+      fail "invalid setup args accepted: ${bad}"; return 1
+    fi
+  done
+
+  # 5. Fresh Tailscale-selected device setup (fallback manual entry without Python 3)
+  write_stub "${b}/tailscale" 'exit 1'
+  out="$(printf 'device\nts-box\ntailscale\n100.64.0.44\ndan\nn\nyes\n' | env -i HOME="${h}" PATH="${b}" "${JACK}" setup 2>&1)" || {
+    fail "tailscale device setup failed: ${out}"; return 1
+  }
+  if ! grep -q '^DEVICE_ts-box_HOST=100.64.0.44$' "${cfg}"; then
+    fail "missing DEVICE_ts-box_HOST"; return 1
+  fi
+
+  # 6. Lock blocks setup atomically
+  mkdir -p "${h}/.config/jack/.setup-lock"
+  if env -i HOME="${h}" PATH="${b}" "${JACK}" setup --non-interactive --yes --device box4 --user eve --host 10.0.0.4 >/dev/null 2>&1; then
+    fail "lock did not block setup"; return 1
+  fi
+  rmdir "${h}/.config/jack/.setup-lock"
+  grep -q 'DEVICE_box4_USER' "${cfg}" && { fail "locked setup modified config"; return 1; }
+  return 0
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1886,6 +1951,7 @@ run_check DEVICE_REGISTRY check_device_registry
 run_check DEFAULT_AND_STATUS check_default_and_status
 run_check ADD_ALIAS_UX check_add_alias_ux
 run_check DOCTOR_DIAGNOSE_REGISTRY check_doctor_diagnose_registry
+run_check SETUP_DEVICE_CENTRIC check_setup_device_centric
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
