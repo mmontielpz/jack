@@ -17,26 +17,54 @@ describe("JACK Desktop V0.1 validation & 7-screen wizard", () => {
     expect(isValidHost("host$(id)")).toBe(false);
   });
 
-  it("navigates all 7 screens with confirmation and dashboard reflection", async () => {
+  it("starts with empty fields for first-time users and renders both targets on Review", async () => {
     render(<App />);
 
     // Screen 01: Welcome
     fireEvent.click(screen.getByText(/Configurar dispositivos/i));
 
-    // Screen 02: Target choice
+    // Screen 02: Target choice (default: both)
     expect(screen.getByText(/¿Qué deseas configurar\?/i)).toBeInTheDocument();
     fireEvent.click(screen.getByText(/Siguiente/i));
 
-    // Screen 03: Discovery
+    // Screen 03: Discovery - fields start empty (no demo defaults)
     await waitFor(() => expect(screen.getByText(/DESKTOP-79SGUPL/i)).toBeInTheDocument());
+    const wsInput = screen.getByLabelText(/Dirección IPv4 o hostname \(Estación de trabajo\)/i) as HTMLInputElement;
+    const macInput = screen.getByLabelText(/Dirección IPv4 o hostname \(Mac/i) as HTMLInputElement;
+    expect(wsInput.value).toBe("");
+    expect(macInput.value).toBe("");
+
+    // Negative: advancing with empty host fails validation
+    fireEvent.click(screen.getByText(/Siguiente/i));
+    expect(screen.getByRole("alert")).toHaveTextContent(/válido/i);
+
+    // Fill both targets
+    fireEvent.change(wsInput, { target: { value: "100.64.0.10" } });
+    fireEvent.change(macInput, { target: { value: "mac.example.ts.net" } });
     fireEvent.click(screen.getByText(/Siguiente/i));
 
-    // Screen 04: SSH User
-    expect(screen.getByLabelText(/Usuario SSH/i)).toBeInTheDocument();
+    // Screen 04: SSH User - fields start empty
+    const wsUserInput = screen.getByLabelText(/Usuario SSH \(Estación de trabajo\)/i) as HTMLInputElement;
+    const macUserInput = screen.getByLabelText(/Usuario SSH \(Mac\)/i) as HTMLInputElement;
+    expect(wsUserInput.value).toBe("");
+    expect(macUserInput.value).toBe("");
+
+    // Negative: invalid username rejected
+    fireEvent.change(wsUserInput, { target: { value: "-baduser" } });
+    fireEvent.click(screen.getByText(/Siguiente/i));
+    expect(screen.getByRole("alert")).toHaveTextContent(/inválido/i);
+
+    fireEvent.change(wsUserInput, { target: { value: "alex" } });
+    fireEvent.change(macUserInput, { target: { value: "sam" } });
     fireEvent.click(screen.getByText(/Siguiente/i));
 
-    // Screen 05: Review (requires explicit confirmation)
+    // Screen 05: Review shows BOTH Workstation and Mac
     expect(screen.getByText(/Confirma la configuración/i)).toBeInTheDocument();
+    expect(screen.getByText("100.64.0.10")).toBeInTheDocument();
+    expect(screen.getByText("alex")).toBeInTheDocument();
+    expect(screen.getByText("mac.example.ts.net")).toBeInTheDocument();
+    expect(screen.getByText("sam")).toBeInTheDocument();
+
     fireEvent.click(screen.getByText(/Guardar y configurar/i));
     expect(screen.getByRole("alert")).toHaveTextContent(/confirmación explícita/i);
 
@@ -49,6 +77,7 @@ describe("JACK Desktop V0.1 validation & 7-screen wizard", () => {
 
     // Screen 07: Dashboard
     await waitFor(() => expect(screen.getByText(/Mis dispositivos/i)).toBeInTheDocument());
-    expect(screen.getByText(/workstation/i)).toBeInTheDocument();
+    expect(screen.getByText("workstation")).toBeInTheDocument();
+    expect(screen.getByText("mac")).toBeInTheDocument();
   });
 });

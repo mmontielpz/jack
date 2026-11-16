@@ -64,8 +64,8 @@ export const App: React.FC = () => {
   const [manualMode, setManualMode] = useState<boolean>(false);
   const [selectedWsPeer, setSelectedWsPeer] = useState<TailscalePeer | null>(null);
   const [selectedMacPeer, setSelectedMacPeer] = useState<TailscalePeer | null>(null);
-  const [wsHost, setWsHost] = useState<string>("DESKTOP-79SGUPL");
-  const [wsUser, setWsUser] = useState<string>("mike");
+  const [wsHost, setWsHost] = useState<string>("");
+  const [wsUser, setWsUser] = useState<string>("");
   const [macHost, setMacHost] = useState<string>("");
   const [macUser, setMacUser] = useState<string>("");
   const [devAlias, setDevAlias] = useState<string>("");
@@ -87,6 +87,16 @@ export const App: React.FC = () => {
     try {
       const list = await jackApi.listDevices();
       setDevices(list);
+      const savedWs = list.find((d) => d.alias === "workstation");
+      const savedMac = list.find((d) => d.alias === "mac");
+      if (savedWs) {
+        setWsHost((prev) => prev || savedWs.host);
+        setWsUser((prev) => prev || savedWs.user);
+      }
+      if (savedMac) {
+        setMacHost((prev) => prev || savedMac.host);
+        setMacUser((prev) => prev || savedMac.user);
+      }
       return list;
     } catch {
       setDevices([]);
@@ -578,8 +588,6 @@ export const App: React.FC = () => {
   }
 
   if (screen === "review") {
-    const primaryHost = mode === "mac" ? macHost : mode === "device" ? devHost : wsHost;
-    const primaryUser = mode === "mac" ? macUser : mode === "device" ? devUser : wsUser;
     const modeLabel =
       mode === "both"
         ? "Ambos (Estación y Mac)"
@@ -600,22 +608,60 @@ export const App: React.FC = () => {
             {errorMsg ? <div className="banner banner-error" role="alert">{errorMsg}</div> : null}
 
             <div className="card-box">
-              <div className="review-row">
-                <OsIcon role={mode === "mac" ? "mac" : "workstation"} />
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>
-                    {mode === "mac" ? ES.review.macLabel : mode === "device" ? ES.review.deviceLabel : ES.review.workstationLabel}
+              {mode === "workstation" || mode === "both" ? (
+                <>
+                  <div className="review-row">
+                    <OsIcon role="workstation" />
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{ES.review.workstationLabel}</div>
+                      <div style={{ color: "#6B7280", fontSize: 14 }}>{wsHost}</div>
+                    </div>
                   </div>
-                  <div style={{ color: "#6B7280", fontSize: 14 }}>{primaryHost}</div>
-                </div>
-              </div>
-              <div className="review-row">
-                <UserIcon />
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{ES.review.userLabel}</div>
-                  <div style={{ color: "#6B7280", fontSize: 14 }}>{primaryUser}</div>
-                </div>
-              </div>
+                  <div className="review-row">
+                    <UserIcon />
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{ES.review.userLabel} ({ES.review.workstationLabel})</div>
+                      <div style={{ color: "#6B7280", fontSize: 14 }}>{wsUser}</div>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {mode === "mac" || (mode === "both" && macHost.trim()) ? (
+                <>
+                  <div className="review-row">
+                    <OsIcon role="mac" />
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{ES.review.macLabel}</div>
+                      <div style={{ color: "#6B7280", fontSize: 14 }}>{macHost}</div>
+                    </div>
+                  </div>
+                  <div className="review-row">
+                    <UserIcon />
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{ES.review.userLabel} ({ES.review.macLabel})</div>
+                      <div style={{ color: "#6B7280", fontSize: 14 }}>{macUser}</div>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {mode === "device" ? (
+                <>
+                  <div className="review-row">
+                    <OsIcon role="device" />
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{ES.review.deviceLabel}</div>
+                      <div style={{ color: "#6B7280", fontSize: 14 }}>{devHost}</div>
+                    </div>
+                  </div>
+                  <div className="review-row">
+                    <UserIcon />
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{ES.review.userLabel}</div>
+                      <div style={{ color: "#6B7280", fontSize: 14 }}>{devUser}</div>
+                    </div>
+                  </div>
+                </>
+              ) : null}
               <div className="review-row">
                 <GearIcon />
                 <div>
