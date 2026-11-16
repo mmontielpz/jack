@@ -772,17 +772,19 @@ Usage:
   jack setup --help
   jack setup --non-interactive --yes [destination options]
 
-Destination options (supply both values for at least one device):
+Destination options (supply complete values for at least one device):
+  --device ALIAS --user USER --host HOST
+  --default ALIAS
   --workstation-user USER --workstation-host HOST
   --mac-user USER --mac-host HOST
 
-Interactive setup asks for destinations and confirmation. Automation requires
---non-interactive and --yes (explicit consent to create/replace configuration).
-No target defaults. Other existing device entries are preserved.
+Interactive setup supports named devices (direct SSH or optional Tailscale),
+legacy workstation/mac roles, default device selection, preview, and explicit consent.
+Automation requires --non-interactive and --yes.
+No target defaults. Other existing device entries and DEFAULT_DEVICE are preserved.
 Saves $HOME/.config/jack/config; stores no credentials.
-With optional Python 3, setup recommends Linux workstations and macOS Macs.
-Choose a to show all devices, or 0 for manual entry. OS advice is not a restriction.
-Without discovery, copy an address from the Tailscale app or admin console. Setup never connects, installs software, or changes SSH policy.
+With optional Python 3 and Tailscale, setup can list tailnet peers or accept manual entry.
+Setup never connects, installs software, or changes SSH policy.
 HELP
 }
 
@@ -1176,7 +1178,11 @@ setup_check_os() {
 
 setup_choose_host() {
   local role="$1" ip name os index choice expected=Linux show_all=0 visible chosen_os=Unknown
-  [[ "${role}" != Mac ]] || expected=macOS
+  if [[ "${role}" == Mac ]]; then
+    expected=macOS
+  elif [[ "${role}" != Workstation ]]; then
+    show_all=1
+  fi
   chosen_host=""
   if [[ -n "${peers}" ]]; then
     while :; do
@@ -1231,7 +1237,8 @@ setup_choose_host() {
 
 cmd_setup() {
   local noninteractive=0 consent=0 seen='|' option value answer selection=""
-  local ws_user='' ws_host='' mac_user='' mac_host='' original peers='' chosen_host=''
+  local ws_user='' ws_host='' mac_user='' mac_host='' dev_alias='' dev_user='' dev_host='' def_alias=''
+  local transport='' original peers='' chosen_host='' idx
   if [[ "${1:-}" == --help && $# -eq 1 ]]; then setup_usage; return; fi
   while [[ $# -gt 0 ]]; do
     option="$1"
@@ -1241,7 +1248,7 @@ cmd_setup() {
     case "${option}" in
       --non-interactive) noninteractive=1 ;;
       --yes) consent=1 ;;
-      --workstation-user|--workstation-host|--mac-user|--mac-host)
+      --workstation-user|--workstation-host|--mac-user|--mac-host|--device|--user|--host|--default)
         [[ $# -gt 0 && "$1" != --* ]] || { setup_error "missing value for ${option}"; return 1; }
         value="$1"; shift
         case "${option}" in
@@ -1249,46 +1256,113 @@ cmd_setup() {
           --workstation-host) ws_host="${value}" ;;
           --mac-user) mac_user="${value}" ;;
           --mac-host) mac_host="${value}" ;;
+          --device) dev_alias="${value}" ;;
+          --user) dev_user="${value}" ;;
+          --host) dev_host="${value}" ;;
+          --default) def_alias="${value}" ;;
         esac ;;
       *) setup_error 'unknown setup option; see jack setup --help'; return 1 ;;
     esac
   done
   if [[ "${noninteractive}" -eq 1 ]]; then
     [[ "${consent}" -eq 1 ]] || { setup_error '--non-interactive requires --yes'; return 1; }
-    [[ -n "${ws_user}${ws_host}${mac_user}${mac_host}" ]] || { setup_error 'supply at least one destination pair'; return 1; }
+    [[ -n "${ws_user}${ws_host}${mac_user}${mac_host}${dev_alias}${dev_user}${dev_host}${def_alias}" ]] || {
+      setup_error 'supply at least one destination pair'; return 1
+    }
+    if [[ -n "${dev_alias}${dev_user}${dev_host}" ]] && [[ -z "${dev_alias}" || -z "${dev_user}" || -z "${dev_host}" ]]; then
+      setup_error '--device requires --user and --host'; return 1
+    fi
   elif [[ "${seen}" != '|' ]]; then
     setup_error 'destination options and --yes require --non-interactive'; return 1
   fi
   setup_paths_safe || return 1
   original="$(setup_snapshot)" || return 1
+  WORKSTATION_USER=""
+  WORKSTATION_HOST=""
+  MAC_USER=""
+  MAC_HOST=""
+  DEFAULT_DEVICE=""
+  DEVICE_LINES=()
+  REG_ALIASES=()
+  REG_USERS=()
+  REG_HOSTS=()
+  REG_SOURCES=()
   if [[ -e "${CONFIG_FILE}" ]]; then load_config || return 1; fi
   echo 'Set up JACK destinations. No passwords or SSH keys are needed here.'
   if [[ "${noninteractive}" -eq 0 ]]; then
-    setup_discover
-    echo 'Find the other device in the Tailscale app/admin console; do not choose this device.'
-    setup_read 'Configure workstation, mac, or both? ' || return 1
+    setup_read 'Configure device, workstation, mac, or both? ' || return 1
     selection="${answer}"
-    case "${selection}" in workstation|mac|both) ;; *) setup_error 'choose workstation, mac, or both'; return 1 ;; esac
-    if [[ "${selection}" == workstation || "${selection}" == both ]]; then
-      setup_choose_host Workstation || return 1; ws_host="${chosen_host}"
-      setup_read 'Workstation SSH username: ' || return 1; ws_user="${answer}"
-    fi
-    if [[ "${selection}" == mac || "${selection}" == both ]]; then
-      setup_choose_host Mac || return 1; mac_host="${chosen_host}"
-      setup_read 'Mac SSH username: ' || return 1; mac_user="${answer}"
+    case "${selection}" in
+      device|workstation|mac|both) ;;
+      *) setup_error 'choose device, workstation, mac, or both'; return 1 ;;
+    esac
+    if [[ "${selection}" == device ]]; then
+      setup_read 'Device alias (lowercase, e.g. win-lab): ' || return 1
+      dev_alias="${answer}"
+      add_device_check_alias 'jack setup' "${dev_alias}" || return 1
+      setup_read 'Transport (ssh or tailscale, default ssh): ' || return 1
+      transport="${answer}"
+      case "${transport}" in
+        ""|ssh)
+          setup_read 'Device address (IPv4 or hostname): ' || return 1
+          dev_host="${answer}"
+          ;;
+        tailscale)
+          setup_discover
+          echo 'Find the other device in the Tailscale app/admin console; do not choose this device.'
+          setup_choose_host "${dev_alias}" || return 1
+          dev_host="${chosen_host}"
+          ;;
+        *) setup_error 'choose ssh or tailscale'; return 1 ;;
+      esac
+      setup_read 'Remote SSH username: ' || return 1
+      dev_user="${answer}"
+      valid_user "${dev_user}" || { setup_error "invalid SSH username '${dev_user}'"; return 1; }
+      valid_host "${dev_host}" || { setup_error "invalid hostname or IPv4 address '${dev_host}'"; return 1; }
+      DEVICE_LINES+=("DEVICE_${dev_alias}_USER=${dev_user}" "DEVICE_${dev_alias}_HOST=${dev_host}")
+      setup_read "Set '${dev_alias}' as default device for bare jack? [y/N]: " || return 1
+      case "${answer}" in
+        y|yes|Y|YES) DEFAULT_DEVICE="${dev_alias}" ;;
+      esac
+    else
+      setup_discover
+      echo 'Find the other device in the Tailscale app/admin console; do not choose this device.'
+      if [[ "${selection}" == workstation || "${selection}" == both ]]; then
+        setup_choose_host Workstation || return 1; ws_host="${chosen_host}"
+        setup_read 'Workstation SSH username: ' || return 1; ws_user="${answer}"
+      fi
+      if [[ "${selection}" == mac || "${selection}" == both ]]; then
+        setup_choose_host Mac || return 1; mac_host="${chosen_host}"
+        setup_read 'Mac SSH username: ' || return 1; mac_user="${answer}"
+      fi
     fi
   fi
-  if [[ "${seen}" == *'|--workstation-'* || ( "${noninteractive}" -eq 0 && "${selection}" != mac ) ]]; then
+  if [[ -n "${dev_alias}" && "${noninteractive}" -eq 1 ]]; then
+    add_device_check_alias 'jack setup' "${dev_alias}" || return 1
+    valid_user "${dev_user}" || { setup_error "invalid SSH username '${dev_user}'"; return 1; }
+    valid_host "${dev_host}" || { setup_error "invalid hostname or IPv4 address '${dev_host}'"; return 1; }
+    DEVICE_LINES+=("DEVICE_${dev_alias}_USER=${dev_user}" "DEVICE_${dev_alias}_HOST=${dev_host}")
+  fi
+  if [[ "${seen}" == *'|--workstation-'* || ( "${noninteractive}" -eq 0 && ( "${selection}" == workstation || "${selection}" == both ) ) ]]; then
     if ! valid_user "${ws_user}" || ! valid_host "${ws_host}"; then
       setup_error 'invalid or missing workstation username/host'; return 1
     fi
     WORKSTATION_USER="${ws_user}"; WORKSTATION_HOST="${ws_host}"
   fi
-  if [[ "${seen}" == *'|--mac-'* || ( "${noninteractive}" -eq 0 && "${selection}" != workstation ) ]]; then
+  if [[ "${seen}" == *'|--mac-'* || ( "${noninteractive}" -eq 0 && ( "${selection}" == mac || "${selection}" == both ) ) ]]; then
     if ! valid_user "${mac_user}" || ! valid_host "${mac_host}"; then
       setup_error 'invalid or missing Mac username/host'; return 1
     fi
     MAC_USER="${mac_user}"; MAC_HOST="${mac_host}"
+  fi
+  if [[ -n "${def_alias}" ]]; then
+    valid_default_alias "${def_alias}" || { setup_error "invalid default alias '${def_alias}'"; return 1; }
+    registry_build
+    idx="$(registry_find "${def_alias}")" || { setup_error "default device '${def_alias}' is not configured"; return 1; }
+    if [[ -z "${REG_USERS[$idx]}" || -z "${REG_HOSTS[$idx]}" ]]; then
+      setup_error "default device '${def_alias}' is incomplete"; return 1
+    fi
+    DEFAULT_DEVICE="${def_alias}"
   fi
   if [[ "${noninteractive}" -eq 0 && -n "${WORKSTATION_HOST}" && "${WORKSTATION_HOST}" == "${MAC_HOST}" ]]; then
     setup_read 'Both roles use the same host. Type yes to allow this duplicate: ' || return 1
@@ -1302,7 +1376,13 @@ cmd_setup() {
     [[ "${answer}" == yes ]] || { setup_error 'cancelled without saving'; return 1; }
   fi
   setup_save || return 1
-  echo 'Configuration saved. Next: jack --status, then jack or jack mac.'
+  if [[ -n "${DEFAULT_DEVICE}" ]]; then
+    printf "Configuration saved. Next: jack status %s, then jack.\n" "${DEFAULT_DEVICE}"
+  elif [[ -n "${dev_alias}" ]]; then
+    printf "Configuration saved. Next: jack status %s, then jack connect %s.\n" "${dev_alias}" "${dev_alias}"
+  else
+    echo 'Configuration saved. Next: jack --status, then jack or jack mac.'
+  fi
   echo 'Reachability is not SSH authorization. Setup did not test an SSH session.'
 }
 

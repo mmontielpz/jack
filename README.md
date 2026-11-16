@@ -2,24 +2,26 @@
 
 ![JACK — J-shaped audio cable symbol and wordmark](assets/brand/logo.svg)
 
-JACK is a minimal CLI for reaching your own devices over Tailscale and SSH.
+JACK is a minimal CLI for reaching your own devices over SSH, with optional Tailscale transport.
 
-Stable release: [v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0).
+Stable release: [v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0) (v0.2.0 device-centric features are active on `main`).
 
-- Connect to a primary remote destination with `jack`, or a Mac with `jack mac`.
-- Configure destinations with guided setup, optional device discovery, or a plain configuration file.
-- Diagnose prerequisites with `jack doctor` and check reachability with `jack --status`.
+- Register and connect to any named device (`jack add <alias>`, `jack connect <alias>`, `jack devices`).
+- Set a default destination for bare `jack` (`jack default <alias>`), or use legacy `jack` / `jack mac`.
+- Configure destinations with guided `jack setup` (direct SSH or optional Tailscale), `jack add <alias>`, or a plain configuration file.
+- Diagnose prerequisites and reachability with `jack doctor`, `jack diagnose`, and `jack status [alias]`.
 
-Supported installation targets: **macOS** (primary) and **Arch Linux / CachyOS**.
-Other Linux distributions and Windows are not supported installation paths.
+Supported client installation targets: **macOS** (primary) and **Arch Linux / CachyOS**.
+Other Linux distributions and Windows are not supported client installation paths (Windows hosts can be registered as remote SSH/Tailscale destinations).
 JACK provides terminal access, not remote desktop. It relies on your existing
-Tailscale and OpenSSH authentication and authorization.
+OpenSSH and optional Tailscale authentication and authorization.
 
 ## Quick Start
 
-Install Bash, an SSH client, and Tailscale through your normal platform workflow;
-connect Tailscale yourself. Git is needed for the source checkout. Python 3 is
-optional for device discovery; manual setup works without it.
+Install Bash and an OpenSSH client through your normal platform workflow (and
+optionally Tailscale if you connect over a tailnet). Git is needed for the source
+checkout. Python 3 is optional for Tailscale device discovery; manual setup and
+direct SSH work without it.
 
 ```bash
 git clone --branch v0.1.0 --single-branch https://github.com/mmontielpz/jack
