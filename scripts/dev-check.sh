@@ -1572,6 +1572,59 @@ check_add_device() {
   return "${rc}"
 }
 
+check_device_registry() {
+  local h cfg b out ssh_log rc=0
+  h="$(mktemp -d "${T}/registry.XXXXXX")"
+  b="$(mktemp -d "${T}/reg-bin.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack"
+  chmod 700 "${h}/.config" "${h}/.config/jack"
+  cfg="${h}/.config/jack/config"
+  ssh_log="${T}/reg-ssh.log"
+  : > "${ssh_log}"
+  write_stub "${b}/ssh" 'printf "%s\n" "$*" >> "${SSH_LOG}"'
+  for k in tailscale curl wget; do write_stub "${b}/${k}" "${TRIPWIRE}"; done
+
+  # 1. Missing/empty config -> jack devices offline PASS
+  out="$(env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" STUB_LOG="${T}/calls.log" "${JACK}" devices --json)" || rc=1
+  [[ "${out}" == '{"schema":"jack-devices/1","devices":[]}' ]] || { fail "empty devices json: ${out}"; rc=1; }
+
+  # 2. Legacy-only + multiple devices -> deterministic JSON, offline
+  printf 'WORKSTATION_USER=alex\nWORKSTATION_HOST=ws.example.ts.net\nMAC_USER=bob\nMAC_HOST=mac.example.ts.net\nDEVICE_win-lab_USER=carol\nDEVICE_win-lab_HOST=100.64.0.10\n' > "${cfg}"
+  chmod 600 "${cfg}"
+  out="$(env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" STUB_LOG="${T}/calls.log" "${JACK}" devices --json)" || rc=1
+  [[ "${out}" == '{"schema":"jack-devices/1","devices":[{"alias":"workstation","user":"alex","host":"ws.example.ts.net","source":"legacy_workstation","complete":true},{"alias":"mac","user":"bob","host":"mac.example.ts.net","source":"legacy_mac","complete":true},{"alias":"win-lab","user":"carol","host":"100.64.0.10","source":"device","complete":true}]}' ]] || { fail "multi devices json: ${out}"; rc=1; }
+  [[ ! -s "${T}/calls.log" ]] || { fail "jack devices invoked network/stub tool"; rc=1; }
+
+  # 3. Reserved CLI verb rejected as alias
+  if printf 'devices\n' | env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "reserved verb devices accepted"; rc=1
+  fi
+  if printf 'connect\n' | env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" "${JACK}" add device >/dev/null 2>&1; then
+    fail "reserved verb connect accepted"; rc=1
+  fi
+
+  # 4. Unknown alias fails closed
+  if env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" "${JACK}" connect missing >/dev/null 2>&1; then
+    fail "unknown alias connect succeeded"; rc=1
+  fi
+
+  # 5. Incomplete profile fails closed on connect and reports complete:false
+  printf 'DEVICE_partial_USER=alex\n' >> "${cfg}"
+  out="$(env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" "${JACK}" devices --json)" || rc=1
+  contains "${out}" '{"alias":"partial","user":"alex","host":"","source":"device","complete":false}' || { fail "incomplete json: ${out}"; rc=1; }
+  if env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" "${JACK}" connect partial >/dev/null 2>&1; then
+    fail "incomplete device connect succeeded"; rc=1
+  fi
+
+  # 6. Connect by alias uses exact user@host via ssh without altering SSH options
+  if ! env -i HOME="${h}" PATH="${b}:/usr/bin:/bin" SSH_LOG="${ssh_log}" "${JACK}" connect win-lab; then
+    fail "jack connect win-lab failed"; rc=1
+  fi
+  [[ "$(cat "${ssh_log}")" == "carol@100.64.0.10" ]] || { fail "unexpected ssh args: $(cat "${ssh_log}")"; rc=1; }
+  return "${rc}"
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1601,6 +1654,7 @@ run_check LIFECYCLE_CLI check_lifecycle_cli
 run_check UPDATE_PLAN check_update_plan
 run_check INSTALL_CONSENT_RACE check_install_consent_race
 run_check ADD_DEVICE check_add_device
+run_check DEVICE_REGISTRY check_device_registry
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046

@@ -16,6 +16,10 @@ WORKSTATION_HOST=""
 MAC_USER=""
 MAC_HOST=""
 DEVICE_LINES=()
+REG_ALIASES=()
+REG_USERS=()
+REG_HOSTS=()
+REG_SOURCES=()
 
 config_error() {
   echo "jack: $* (${CONFIG_FILE}). See config.example and jack --help." >&2
@@ -58,7 +62,69 @@ valid_device_alias() {
   local LC_ALL=C alias="$1"
   [[ ${#alias} -ge 1 && ${#alias} -le 32 ]] || return 1
   [[ "${alias}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || return 1
-  [[ "${alias}" != "workstation" && "${alias}" != "mac" ]] || return 1
+  case "${alias}" in
+    workstation|mac|add|connect|devices|default|status|doctor|diagnose|repair|setup|update|install|uninstall|help)
+      return 1
+      ;;
+  esac
+}
+
+registry_upsert() {
+  local alias="$1" user="$2" host="$3" source="$4" i=0 count="${#REG_ALIASES[@]}"
+  while [[ "${i}" -lt "${count}" ]]; do
+    if [[ "${REG_ALIASES[$i]}" == "${alias}" ]]; then
+      [[ -z "${user}" ]] || REG_USERS[i]="${user}"
+      [[ -z "${host}" ]] || REG_HOSTS[i]="${host}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  REG_ALIASES+=("${alias}")
+  REG_USERS+=("${user}")
+  REG_HOSTS+=("${host}")
+  REG_SOURCES+=("${source}")
+}
+
+registry_find() {
+  local target="$1" i=0 count="${#REG_ALIASES[@]}"
+  while [[ "${i}" -lt "${count}" ]]; do
+    if [[ "${REG_ALIASES[$i]}" == "${target}" ]]; then
+      printf '%s\n' "${i}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+registry_build() {
+  local line key value alias
+  REG_ALIASES=()
+  REG_USERS=()
+  REG_HOSTS=()
+  REG_SOURCES=()
+  if [[ -n "${WORKSTATION_USER}" || -n "${WORKSTATION_HOST}" ]]; then
+    registry_upsert "workstation" "${WORKSTATION_USER}" "${WORKSTATION_HOST}" "legacy_workstation"
+  fi
+  if [[ -n "${MAC_USER}" || -n "${MAC_HOST}" ]]; then
+    registry_upsert "mac" "${MAC_USER}" "${MAC_HOST}" "legacy_mac"
+  fi
+  for line in "${DEVICE_LINES[@]+"${DEVICE_LINES[@]}"}"; do
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "${key}" in
+      DEVICE_*_USER)
+        alias="${key#DEVICE_}"
+        alias="${alias%_USER}"
+        registry_upsert "${alias}" "${value}" "" "device"
+        ;;
+      DEVICE_*_HOST)
+        alias="${key#DEVICE_}"
+        alias="${alias%_HOST}"
+        registry_upsert "${alias}" "" "${value}" "device"
+        ;;
+    esac
+  done
 }
 
 load_config() {
@@ -68,6 +134,10 @@ load_config() {
   MAC_USER=""
   MAC_HOST=""
   DEVICE_LINES=()
+REG_ALIASES=()
+REG_USERS=()
+REG_HOSTS=()
+REG_SOURCES=()
   [[ -f "${CONFIG_FILE}" && -r "${CONFIG_FILE}" ]] || {
     config_error "configuration file missing or unreadable; run jack setup"; return 1;
   }
@@ -113,6 +183,7 @@ load_config() {
       DEVICE_*_USER|DEVICE_*_HOST) DEVICE_LINES+=("${key}=${value}") ;;
     esac
   done < "${CONFIG_FILE}"
+  registry_build
 }
 
 require_device() {
@@ -129,6 +200,8 @@ jack — connect to your machines
 Usage:
   jack          Connect to workstation
   jack mac      Connect to Mac
+  jack devices  List configured devices offline (--json supported)
+  jack connect <alias> Connect to a configured device by alias
   jack --status Show status
   jack doctor   Read-only first-run diagnostics (0 pass, 1 failure, 2 warnings)
   jack --version Show version (no configuration or network access)
@@ -452,6 +525,100 @@ cmd_mac() {
   exec ssh "${MAC_USER}@${MAC_HOST}"
 }
 
+cmd_devices() {
+  local json_mode=0 i=0 count complete status_label u h
+  if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+    [[ $# -eq 1 ]] || { echo "jack devices: too many arguments" >&2; return 1; }
+    printf 'Usage:\n  jack devices\n  jack devices --json\n'
+    return 0
+  fi
+  if [[ "${1:-}" == --json ]]; then
+    [[ $# -eq 1 ]] || { echo "jack devices: too many arguments" >&2; return 1; }
+    json_mode=1
+  elif [[ $# -gt 0 ]]; then
+    echo "jack devices: unknown argument: $1" >&2
+    return 1
+  fi
+
+  WORKSTATION_USER=""
+  WORKSTATION_HOST=""
+  MAC_USER=""
+  MAC_HOST=""
+  DEVICE_LINES=()
+  REG_ALIASES=()
+  REG_USERS=()
+  REG_HOSTS=()
+  REG_SOURCES=()
+  if [[ -e "${CONFIG_FILE}" || -L "${CONFIG_FILE}" ]]; then
+    load_config || return 1
+  fi
+
+  count="${#REG_ALIASES[@]}"
+  if [[ "${json_mode}" -eq 1 ]]; then
+    printf '{"schema":"jack-devices/1","devices":['
+    while [[ "${i}" -lt "${count}" ]]; do
+      u="${REG_USERS[$i]}"
+      h="${REG_HOSTS[$i]}"
+      if [[ -n "${u}" && -n "${h}" ]]; then complete=true; else complete=false; fi
+      [[ "${i}" -eq 0 ]] || printf ','
+      printf '{"alias":"%s","user":"%s","host":"%s","source":"%s","complete":%s}' \
+        "${REG_ALIASES[$i]}" "${u}" "${h}" "${REG_SOURCES[$i]}" "${complete}"
+      i=$((i + 1))
+    done
+    printf ']}\n'
+    return 0
+  fi
+
+  if [[ "${count}" -eq 0 ]]; then
+    echo "No devices configured. Run 'jack add device' or 'jack setup'."
+    return 0
+  fi
+  while [[ "${i}" -lt "${count}" ]]; do
+    u="${REG_USERS[$i]}"
+    h="${REG_HOSTS[$i]}"
+    if [[ -n "${u}" && -n "${h}" ]]; then status_label="ready"; else status_label="incomplete"; fi
+    printf '%s\t%s@%s\t(%s)\n' "${REG_ALIASES[$i]}" "${u:-?}" "${h:-?}" "${status_label}"
+    i=$((i + 1))
+  done
+}
+
+cmd_connect_alias() {
+  if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+    [[ $# -eq 1 ]] || { echo "jack connect: too many arguments" >&2; return 1; }
+    printf 'Usage:\n  jack connect <alias>\n'
+    return 0
+  fi
+  [[ $# -eq 1 ]] || { echo "jack connect: expected exactly one device alias" >&2; return 1; }
+  local alias="$1" idx u h src
+  load_config || return 1
+  idx="$(registry_find "${alias}")" || {
+    echo "jack connect: unknown device alias '${alias}'" >&2
+    return 1
+  }
+  u="${REG_USERS[$idx]}"
+  h="${REG_HOSTS[$idx]}"
+  src="${REG_SOURCES[$idx]}"
+  if [[ -z "${u}" || -z "${h}" ]]; then
+    echo "jack connect: device '${alias}' is incomplete; both user and host are required" >&2
+    return 1
+  fi
+  if [[ "${src}" == legacy_mac ]]; then
+    require_ssh
+    require_tailscale
+    if ! check_reachable "${h}"; then
+      echo "jack: Mac is not reachable over Tailscale" >&2
+      exit 1
+    fi
+    exec ssh "${u}@${h}"
+  elif [[ "${src}" == legacy_workstation ]]; then
+    require_ssh
+    require_tailscale
+    exec ssh "${u}@${h}"
+  fi
+  require_ssh
+  exec ssh "${u}@${h}"
+}
+
 setup_usage() {
   cat <<'HELP'
 Usage:
@@ -593,6 +760,10 @@ cmd_add_device() {
   MAC_USER=""
   MAC_HOST=""
   DEVICE_LINES=()
+REG_ALIASES=()
+REG_USERS=()
+REG_HOSTS=()
+REG_SOURCES=()
   if [[ -e "${CONFIG_FILE}" ]]; then
     load_config || return 1
   fi
@@ -1179,6 +1350,14 @@ main() {
       if [[ $# -gt 1 ]]; then echo "jack: too many arguments" >&2; usage >&2; exit 1; fi
       load_config
       cmd_mac
+      ;;
+    devices)
+      shift
+      cmd_devices "$@"
+      ;;
+    connect)
+      shift
+      cmd_connect_alias "$@"
       ;;
     "")
       load_config
