@@ -1424,6 +1424,7 @@ if [ "$tool" = ln ]; then exec "$base/ln-real" "$@"; fi
           label="${os}/${route}/${stage}/${kind}"
           home="${race}/home-${os}-${route}-${stage}-${kind}"
           mkdir -p "${home}/.local/bin" "${home}/.config/jack" "${home}/.ssh"
+          chmod 700 "${home}" "${home}/.local" "${home}/.local/bin" "${home}/.config" "${home}/.config/jack" "${home}/.ssh"
           printf '%s\n' "${VALID_CONFIG}" > "${home}/.config/jack/config"
           printf 'synthetic key\n' > "${home}/.ssh/key"
           printf 'synthetic profile\n' > "${home}/.profile"
