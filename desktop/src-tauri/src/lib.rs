@@ -263,7 +263,51 @@ pub struct NetworkReachabilityResult {
 pub struct SshAuthTestResult {
     pub status: String, // "VERIFIED" | "FAILED" | "NOT_TESTED"
     pub host_key_checked: bool,
+    pub failure_category: Option<String>, // "offline" | "ssh_unavailable" | "auth_rejected" | "host_key_issue" | "timeout" | "unknown"
+    pub recovery_hint: Option<String>,
     pub detail: String,
+}
+
+pub fn classify_ssh_failure(stderr: &str) -> (&'static str, &'static str) {
+    let low = stderr.to_lowercase();
+    if low.contains("host key verification failed")
+        || low.contains("remote host identification has changed")
+        || low.contains("offending")
+        || low.contains("known_hosts")
+    {
+        (
+            "host_key_issue",
+            "Host key is unknown or changed. Verify the host fingerprint out-of-band and update ~/.ssh/known_hosts before retrying.",
+        )
+    } else if low.contains("permission denied") || low.contains("publickey") {
+        (
+            "auth_rejected",
+            "SSH key authentication was rejected. Ensure your public key is in ~/.ssh/authorized_keys on the target.",
+        )
+    } else if low.contains("timed out") {
+        (
+            "timeout",
+            "Connection timed out. Verify the device is online and port 22 is reachable.",
+        )
+    } else if low.contains("connection refused") {
+        (
+            "ssh_unavailable",
+            "Connection refused on port 22. Ensure OpenSSH Server is running on the remote device.",
+        )
+    } else if low.contains("could not resolve")
+        || low.contains("network is unreachable")
+        || low.contains("no route to host")
+    {
+        (
+            "offline",
+            "Target appears offline or unreachable. Check Tailscale connectivity or hostname.",
+        )
+    } else {
+        (
+            "unknown",
+            "Check SSH connectivity, username, and local SSH configuration, then retry.",
+        )
+    }
 }
 
 pub fn parse_tailscale_state_json(raw: &str) -> TailscaleState {
@@ -595,6 +639,8 @@ fn test_ssh_authentication_impl(
         return Ok(SshAuthTestResult {
             status: "NOT_TESTED".into(),
             host_key_checked: false,
+            failure_category: None,
+            recovery_hint: Some("Disable JACK_CONNECT_DRY_RUN to run a live authorized SSH test.".into()),
             detail: "Dry-run mode active: SSH authentication was not tested.".into(),
         });
     }
@@ -619,6 +665,8 @@ fn test_ssh_authentication_impl(
         Ok(SshAuthTestResult {
             status: "VERIFIED".into(),
             host_key_checked: true,
+            failure_category: None,
+            recovery_hint: None,
             detail: format!(
                 "SSH authentication succeeded for '{}' with verified host key.",
                 target
@@ -626,6 +674,7 @@ fn test_ssh_authentication_impl(
         })
     } else {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let (cat, hint) = classify_ssh_failure(&stderr);
         let detail = if stderr.is_empty() {
             "SSH authentication failed or host key is not trusted in known_hosts.".into()
         } else {
@@ -635,6 +684,8 @@ fn test_ssh_authentication_impl(
         Ok(SshAuthTestResult {
             status: "FAILED".into(),
             host_key_checked: true,
+            failure_category: Some(cat.into()),
+            recovery_hint: Some(hint.into()),
             detail,
         })
     }
@@ -1244,5 +1295,12 @@ mod tests {
         assert_eq!(dry_net.status, "NOT_TESTED");
         let dry_ssh = test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), true, true).unwrap();
         assert_eq!(dry_ssh.status, "NOT_TESTED");
+
+        // Failure classification
+        assert_eq!(classify_ssh_failure("Host key verification failed.").0, "host_key_issue");
+        assert_eq!(classify_ssh_failure("Permission denied (publickey).").0, "auth_rejected");
+        assert_eq!(classify_ssh_failure("ssh: connect to host x port 22: Connection timed out").0, "timeout");
+        assert_eq!(classify_ssh_failure("ssh: connect to host x port 22: Connection refused").0, "ssh_unavailable");
+        assert_eq!(classify_ssh_failure("Could not resolve hostname x").0, "offline");
     }
 }

@@ -127,6 +127,8 @@ export interface NetworkReachabilityResult {
 export interface SshAuthTestResult {
   status: "VERIFIED" | "FAILED" | "NOT_TESTED";
   host_key_checked: boolean;
+  failure_category?: "offline" | "ssh_unavailable" | "auth_rejected" | "host_key_issue" | "timeout" | "unknown" | null;
+  recovery_hint?: string | null;
   detail: string;
 }
 
