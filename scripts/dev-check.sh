@@ -1766,6 +1766,93 @@ check_add_alias_ux() {
   return "${rc}"
 }
 
+check_doctor_diagnose_registry() {
+  local h cfg b out rc=0 snap
+  h="$(mktemp -d "${T}/docdiag.XXXXXX")"
+  b="$(mktemp -d "${T}/docdiag-bin.XXXXXX")"
+  chmod 700 "${h}"
+  mkdir -p "${h}/.config/jack"
+  chmod 700 "${h}/.config" "${h}/.config/jack"
+  cfg="${h}/.config/jack/config"
+  for k in bash stat grep dirname find mkdir ln readlink rm chmod mktemp mv rmdir timeout; do link_tool "${b}" "${k}" || return 1; done
+  mkdir -p "${b}/real"
+  ln -s "$(command -v cat)" "${b}/real/cat"
+  write_stub "${b}/uname" 'echo Linux'
+  write_stub "${b}/cat" 'if [ "$1" = /etc/os-release ]; then printf "ID=arch\n"; else exec "${0%/*}/real/cat" "$@"; fi'
+  write_stub "${b}/ssh" 'exit 0'
+
+  # 1. Missing config -> diagnose INCIDENT_CONFIG_MISSING (rc=1)
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" diagnose --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"incident_classification":"INCIDENT_CONFIG_MISSING"'; then
+    fail "missing config diagnose: rc=${rc} ${out}"; return 1
+  fi
+
+  # 2. Malformed config -> diagnose INCIDENT_CONFIG_INVALID (rc=1)
+  printf 'NOT_A_VALID_LINE\n' > "${cfg}"
+  chmod 600 "${cfg}"
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" diagnose --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"incident_classification":"INCIDENT_CONFIG_INVALID"'; then
+    fail "malformed config diagnose: rc=${rc} ${out}"; return 1
+  fi
+
+  # 3. Incomplete-only config -> doctor rc=1, diagnose INCIDENT_NO_COMPLETE_DEVICE (rc=1)
+  printf 'DEVICE_inc_USER=erin\n' > "${cfg}"
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" diagnose --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"incident_classification":"INCIDENT_NO_COMPLETE_DEVICE"'; then
+    fail "incomplete config diagnose: rc=${rc} ${out}"; return 1
+  fi
+
+  # 4. DEVICE_*-only direct SSH without Tailscale CLI -> doctor rc=2 (non-fatal WARN), doctor --json rc=0 WARN, diagnose unreachable rc=2
+  printf 'DEVICE_sshbox_USER=erin\nDEVICE_sshbox_HOST=127.0.0.1\n' > "${cfg}"
+  snap="$(cat "${cfg}")"
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" doctor 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 2 ]] || ! contains "${out}" 'WARN Tailscale CLI: missing (optional;' || ! contains "${out}" 'PASS Configuration: valid; device profile(s) configured'; then
+    fail "ssh-only doctor: rc=${rc} ${out}"; return 1
+  fi
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" doctor --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! contains "${out}" '"overall_status":"WARN"' || ! contains "${out}" '"required":false' || ! contains "${out}" '"complete_devices":1'; then
+    fail "ssh-only doctor --json: rc=${rc} ${out}"; return 1
+  fi
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" JACK_SSH_PORT=1 "${JACK}" diagnose --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 2 ]] || ! contains "${out}" '"incident_classification":"INCIDENT_TARGET_UNREACHABLE"'; then
+    fail "ssh-only diagnose unreachable: rc=${rc} ${out}"; return 1
+  fi
+  [[ "$(cat "${cfg}")" == "${snap}" ]] || { fail "doctor/diagnose mutated config"; return 1; }
+
+  # 5. Invalid DEFAULT_DEVICE -> doctor rc=1, doctor --json rc=1, diagnose INCIDENT_DEFAULT_DEVICE_INVALID (rc=1)
+  printf 'DEVICE_sshbox_USER=erin\nDEVICE_sshbox_HOST=127.0.0.1\nDEFAULT_DEVICE=missing\n' > "${cfg}"
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" doctor --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"default_device_valid":false'; then
+    fail "invalid default doctor --json: rc=${rc} ${out}"; return 1
+  fi
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" diagnose --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"incident_classification":"INCIDENT_DEFAULT_DEVICE_INVALID"'; then
+    fail "invalid default diagnose: rc=${rc} ${out}"; return 1
+  fi
+
+  # 6. Mixed SSH + Tailscale without Tailscale CLI -> fatal rc=1
+  printf 'WORKSTATION_USER=alex\nWORKSTATION_HOST=ws.example.ts.net\nDEVICE_sshbox_USER=erin\nDEVICE_sshbox_HOST=127.0.0.1\n' > "${cfg}"
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" doctor --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"overall_status":"FAIL"' || ! contains "${out}" '"required":true'; then
+    fail "mixed doctor --json: rc=${rc} ${out}"; return 1
+  fi
+  rc=0
+  out="$(env -i HOME="${h}" PATH="${b}" "${JACK}" diagnose --json 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 1 ]] || ! contains "${out}" '"incident_classification":"INCIDENT_TAILSCALE_MISSING"'; then
+    fail "mixed diagnose: rc=${rc} ${out}"; return 1
+  fi
+  return 0
+}
+
 run_check BASH_SYNTAX check_syntax
 run_check EXECUTABLES check_executables
 run_check CLI_HELP check_help
@@ -1798,6 +1885,7 @@ run_check ADD_DEVICE check_add_device
 run_check DEVICE_REGISTRY check_device_registry
 run_check DEFAULT_AND_STATUS check_default_and_status
 run_check ADD_ALIAS_UX check_add_alias_ux
+run_check DOCTOR_DIAGNOSE_REGISTRY check_doctor_diagnose_registry
 
 if command -v shellcheck >/dev/null 2>&1; then
   # shellcheck disable=SC2046
