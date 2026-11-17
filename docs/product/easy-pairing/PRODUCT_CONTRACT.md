@@ -30,11 +30,12 @@
 
 ## 3. Core User Journeys (`PROPOSAL`)
 
-1. **Primary User Journey (Linux Client <-> Windows Host):**
-   - Brother installs JACK on Windows, opens **Share This Device**, and generates a temporary QR/pairing code.
-   - Owner installs JACK on Linux, opens **Add Device**, scans QR or enters the code.
-   - Both verify device identity (SAS comparison for code flow); brother reviews the request and taps **Approve** with a chosen capability scope and duration.
-   - Both screens transition to **Connected** without the owner ever entering a Windows username, IP address, SSH port, SSH key, or Tailscale config.
+1. **Primary User Journey (Auth Code-First, Linux Client <-> Windows Host):**
+   - Brother installs JACK on Windows, opens **Share This Device**, and generates a temporary **Auth Code** (`XXXX-XXXX`). *(QR code and Android companion app remain optional and deferred.)*
+   - Owner installs JACK on Linux, opens **Add Device**, and enters the temporary **Auth Code**.
+   - Both verify the 6-digit **SAS**; brother reviews the requesting device identity, capability (`status.read` in EP-003), and duration (default: **This session only**) and taps **Approve**.
+   - Client displays **Connected** *only* after session authentication and authorization complete, without the owner ever entering a Windows username, IP address, SSH port, or SSH key.
+   - *(Note: An Auth Code does not solve network reachability; separate-NAT devices without LAN or Tailscale require the deferred EP-006 coordination/relay transport.)*
 2. **First-Time Installation Journey:**
    - First launch generates a local per-installation Ed25519 device identity in OS-protected storage, with zero remote pairing or background remote access enabled by default.
 3. **Returning-User & Reconnection Journey:**

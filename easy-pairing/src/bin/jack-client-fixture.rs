@@ -20,13 +20,15 @@ fn main() {
     let _client_auth = AuthStore::open_isolated(&jack_home).expect("client auth store");
 
     let (host_id, host_pk, sas) =
-        client_pair_with_code(addr, &client_id, "linux-client-fixture", code, None)
-            .expect("pairing succeeded");
+        client_pair_with_code(addr, &client_id, "linux-client-fixture", code, None, |_| {
+            true
+        })
+        .expect("pairing succeeded");
     println!("PAIRED {} {}", host_id.0, sas);
 
     let status = client_invoke_capability(addr, &client_id, host_pk, "status.read")
         .expect("status.read succeeded");
-    println!("STATUS_OK {} {}", status.os, status.host_device_id);
+    println!("STATUS_OK {} {}", status.status, status.os);
 
     let denied = client_invoke_capability(addr, &client_id, host_pk, "workspace.read")
         .expect_err("workspace.read must be denied");

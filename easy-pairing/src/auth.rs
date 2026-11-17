@@ -19,7 +19,7 @@ impl CapabilityScope {
         match raw {
             "status.read" => Ok(Self::StatusRead),
             other => Err(JackError::ScopeDenied(format!(
-                "capability '{}' is not permitted in EP-002 (status.read only)",
+                "capability '{}' is not permitted in EP-003 (status.read only)",
                 other
             ))),
         }
@@ -28,6 +28,27 @@ impl CapabilityScope {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::StatusRead => "status.read",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DurationPolicy {
+    #[default]
+    SessionOnly,
+    OneHour,
+    TwentyFourHours,
+    RememberDevice,
+}
+
+impl DurationPolicy {
+    pub fn ttl_secs(self) -> Option<u64> {
+        match self {
+            Self::SessionOnly => Some(3600), // bounded session grant, invalidated on session close
+            Self::OneHour => Some(3600),
+            Self::TwentyFourHours => Some(86_400),
+            Self::RememberDevice => None, // persistent trust, never unattended background access
         }
     }
 }
@@ -46,6 +67,8 @@ pub struct Grant {
     pub grant_id: String,
     pub peer_id: DeviceId,
     pub scopes: Vec<CapabilityScope>,
+    pub duration_policy: DurationPolicy,
+    pub issued_at: u64,
     pub expires_at: Option<u64>,
     pub revoked: bool,
 }
@@ -65,7 +88,13 @@ pub fn now_unix() -> u64 {
 
 #[derive(Debug, Clone)]
 pub struct ActiveSessionHandle {
+    pub session_id: String,
     pub peer_id: DeviceId,
+    pub grant_id: String,
+    pub created_at: u64,
+    pub last_activity_at: u64,
+    pub idle_timeout_secs: u64,
+    pub expires_at: u64,
     pub revoked_flag: Arc<AtomicBool>,
 }
 
@@ -83,11 +112,24 @@ impl ActiveSessionHandle {
 pub struct AuthStore {
     store_path: PathBuf,
     state: Mutex<AuthSnapshot>,
-    active_sessions: Mutex<Vec<ActiveSessionHandle>>,
+    sessions: Mutex<HashMap<String, ActiveSessionHandle>>,
+    max_concurrent_sessions: usize,
+    idle_timeout_secs: u64,
+    session_max_lifetime_secs: u64,
+    session_seq: Mutex<u64>,
 }
 
 impl AuthStore {
     pub fn open_isolated(jack_home: &Path) -> Result<Self, JackError> {
+        Self::open_isolated_with_limits(jack_home, 4, 300, 3600)
+    }
+
+    pub fn open_isolated_with_limits(
+        jack_home: &Path,
+        max_concurrent_sessions: usize,
+        idle_timeout_secs: u64,
+        session_max_lifetime_secs: u64,
+    ) -> Result<Self, JackError> {
         validate_safe_dir(jack_home)?;
         if !jack_home.exists() {
             fs::create_dir_all(jack_home)
@@ -114,7 +156,11 @@ impl AuthStore {
         Ok(Self {
             store_path,
             state: Mutex::new(state),
-            active_sessions: Mutex::new(Vec::new()),
+            sessions: Mutex::new(HashMap::new()),
+            max_concurrent_sessions,
+            idle_timeout_secs,
+            session_max_lifetime_secs,
+            session_seq: Mutex::new(0),
         })
     }
 
@@ -152,13 +198,29 @@ impl AuthStore {
         device_id: DeviceId,
         display_name: String,
         public_key: [u8; 32],
-        ttl_secs: Option<u64>,
+        duration_policy: DurationPolicy,
+    ) -> Result<Grant, JackError> {
+        self.approve_and_persist_at(
+            device_id,
+            display_name,
+            public_key,
+            duration_policy,
+            now_unix(),
+        )
+    }
+
+    pub fn approve_and_persist_at(
+        &self,
+        device_id: DeviceId,
+        display_name: String,
+        public_key: [u8; 32],
+        duration_policy: DurationPolicy,
+        now: u64,
     ) -> Result<Grant, JackError> {
         let mut snap = self
             .state
             .lock()
             .map_err(|_| JackError::AuthStateUnavailable("auth mutex poisoned".into()))?;
-        let now = now_unix();
         snap.peers.insert(
             device_id.0.clone(),
             TrustedPeer {
@@ -174,7 +236,9 @@ impl AuthStore {
             grant_id: grant_id.clone(),
             peer_id: device_id.clone(),
             scopes: vec![CapabilityScope::StatusRead],
-            expires_at: ttl_secs.map(|s| now.saturating_add(s)),
+            duration_policy,
+            issued_at: now,
+            expires_at: duration_policy.ttl_secs().map(|s| now.saturating_add(s)),
             revoked: false,
         };
         snap.grants.insert(device_id.0.clone(), grant.clone());
@@ -183,17 +247,89 @@ impl AuthStore {
     }
 
     pub fn register_session(&self, peer_id: &DeviceId) -> Result<ActiveSessionHandle, JackError> {
-        self.authorize_capability(peer_id, "status.read", None)?;
-        let handle = ActiveSessionHandle {
-            peer_id: peer_id.clone(),
-            revoked_flag: Arc::new(AtomicBool::new(false)),
-        };
+        self.register_session_at(peer_id, now_unix())
+    }
+
+    pub fn register_session_at(
+        &self,
+        peer_id: &DeviceId,
+        now: u64,
+    ) -> Result<ActiveSessionHandle, JackError> {
+        let grant = self.authorize_capability(peer_id, "status.read", None, now)?;
         let mut sessions = self
-            .active_sessions
+            .sessions
             .lock()
             .map_err(|_| JackError::AuthStateUnavailable("session mutex poisoned".into()))?;
-        sessions.push(handle.clone());
+
+        // Prune revoked/expired sessions before checking concurrency bound
+        sessions.retain(|_, s| {
+            !s.is_revoked()
+                && now <= s.expires_at
+                && now.saturating_sub(s.last_activity_at) <= s.idle_timeout_secs
+        });
+        if sessions.len() >= self.max_concurrent_sessions {
+            return Err(JackError::SessionLimitReached);
+        }
+
+        let mut seq = self
+            .session_seq
+            .lock()
+            .map_err(|_| JackError::AuthStateUnavailable("seq mutex poisoned".into()))?;
+        *seq = seq.saturating_add(1);
+        let session_id = format!("sess-{}-{}", now, *seq);
+
+        let handle = ActiveSessionHandle {
+            session_id: session_id.clone(),
+            peer_id: peer_id.clone(),
+            grant_id: grant.grant_id,
+            created_at: now,
+            last_activity_at: now,
+            idle_timeout_secs: self.idle_timeout_secs,
+            expires_at: now.saturating_add(self.session_max_lifetime_secs),
+            revoked_flag: Arc::new(AtomicBool::new(false)),
+        };
+        sessions.insert(session_id, handle.clone());
         Ok(handle)
+    }
+
+    pub fn validate_session_request(
+        &self,
+        session_id: &str,
+        scope_raw: &str,
+        now: u64,
+    ) -> Result<(), JackError> {
+        let peer_id = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| JackError::AuthStateUnavailable("session mutex poisoned".into()))?;
+            let sess = sessions
+                .get_mut(session_id)
+                .ok_or(JackError::TrustRevoked)?;
+            if sess.is_revoked() {
+                return Err(JackError::TrustRevoked);
+            }
+            if now.saturating_sub(sess.last_activity_at) > sess.idle_timeout_secs {
+                sess.revoke();
+                return Err(JackError::SessionIdleTimeout);
+            }
+            if now > sess.expires_at {
+                sess.revoke();
+                return Err(JackError::GrantExpired);
+            }
+            sess.last_activity_at = now;
+            sess.peer_id.clone()
+        };
+        self.authorize_capability(&peer_id, scope_raw, None, now)?;
+        Ok(())
+    }
+
+    pub fn close_session(&self, session_id: &str) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            if let Some(s) = sessions.remove(session_id) {
+                s.revoke();
+            }
+        }
     }
 
     pub fn trusted_pubkey_for_peer(&self, peer_id: &DeviceId) -> Result<[u8; 32], JackError> {
@@ -213,14 +349,14 @@ impl AuthStore {
         peer_id: &DeviceId,
         scope_raw: &str,
         session: Option<&ActiveSessionHandle>,
-    ) -> Result<(), JackError> {
+        now: u64,
+    ) -> Result<Grant, JackError> {
         let scope = CapabilityScope::parse(scope_raw)?;
         if let Some(s) = session {
             if s.is_revoked() {
                 return Err(JackError::TrustRevoked);
             }
         }
-        // Fail closed if store file was tampered with or replaced by a symlink on disk
         if self.store_path.exists() {
             validate_safe_file(&self.store_path)?;
         }
@@ -237,7 +373,7 @@ impl AuthStore {
             return Err(JackError::TrustRevoked);
         }
         if let Some(exp) = grant.expires_at {
-            if now_unix() > exp {
+            if now > exp {
                 return Err(JackError::GrantExpired);
             }
         }
@@ -247,7 +383,7 @@ impl AuthStore {
                 scope.as_str()
             )));
         }
-        Ok(())
+        Ok(grant.clone())
     }
 
     pub fn revoke_peer(&self, peer_id: &DeviceId) -> Result<(), JackError> {
@@ -265,15 +401,24 @@ impl AuthStore {
             self.persist_locked(&snap)?;
         }
         let sessions = self
-            .active_sessions
+            .sessions
             .lock()
             .map_err(|_| JackError::AuthStateUnavailable("session mutex poisoned".into()))?;
-        for s in sessions.iter() {
+        for s in sessions.values() {
             if &s.peer_id == peer_id {
                 s.revoke();
             }
         }
         Ok(())
+    }
+
+    pub fn shutdown_all_sessions(&self) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            for s in sessions.values() {
+                s.revoke();
+            }
+            sessions.clear();
+        }
     }
 }
 
