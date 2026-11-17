@@ -58,10 +58,12 @@ when a destination is unused or unreachable, even if the other is usable.
 
 - [User guide](docs/guide.md): installation prerequisites, PATH, setup and automation,
   discovery limits, manual configuration, migration, diagnosis, upgrade and uninstall.
+- [Product roadmap & support matrix](docs/ROADMAP.md): V0.2 experimental RC (JACK Desktop + Easy Pairing `status.read` preview), V0.3, and V1.0 milestones across Linux, macOS, and Windows.
+- [Easy Pairing architecture & ADRs](docs/product/easy-pairing/ADR.md): SPAKE2 + TLS 1.3 exporter binding, SAS verification, Host approval, and `JACK-VM-GRANT-001` ([docs/JACK-VM-GRANT-001.md](docs/JACK-VM-GRANT-001.md)).
 - [Security policy](SECURITY.md): trust boundaries and private vulnerability reporting.
 - [Contributing](CONTRIBUTING.md): offline checks, bugs, proposals and pull requests.
 - [Release policy](docs/releases.md): exact released source, versioning and acceptance.
-- [v0.1.0 release notes](docs/release-notes-0.1.0.md): evidence and accepted limitations.
+- [v0.2.0-rc.1 experimental RC notes](docs/release-notes-0.2.0-rc.1.md) & [v0.1.0 release notes](docs/release-notes-0.1.0.md): evidence and accepted limitations.
 - [Brand guidelines](docs/branding.md): vector assets, palette, provenance and usage.
 
 ## License

@@ -1,12 +1,20 @@
 name: EP-005 macOS Preview Build
 
 on:
-  workflow_dispatch:
+  push:
+    branches: ["candidate/**"]
   pull_request:
     paths:
       - "desktop/**"
       - "easy-pairing/**"
       - ".github/workflows/macos-preview.yml"
+  workflow_dispatch:
+    inputs:
+      include_x64:
+        description: "Also build Intel (x86_64-apple-darwin) DMG"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -20,9 +28,12 @@ jobs:
           - arch: arm64
             target: aarch64-apple-darwin
             expected_lipo: arm64
+            enabled: true
           - arch: x64
             target: x86_64-apple-darwin
             expected_lipo: x86_64
+            enabled: ${{ github.event_name == 'workflow_dispatch' && inputs.include_x64 == true }}
+    if: ${{ matrix.enabled }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +46,17 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            easy-pairing/target/
+            desktop/src-tauri/target/
+          key: macos-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            macos-cargo-${{ matrix.target }}-
 
       - name: Rust & Frontend checks
         run: |
@@ -106,7 +128,6 @@ jobs:
           SPCTL_OUT="$(spctl --assess --type execute --verbose=4 "$APP_PATH" 2>&1 || true)"
           echo "$SPCTL_OUT"
 
-          # Attempt isolated binary launch smoke (headless CI runner may lack WindowServer GUI)
           GUI_RUNTIME="NOT_TESTED"
           mkdir -p "$TMP_HOME/.config/jack"
           set +e

@@ -2,9 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "candidate/**"]
   pull_request:
-    branches: [main, develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
@@ -15,9 +14,20 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Record Ubuntu runner OS & kernel provenance
+        run: |
+          cat /etc/os-release
+          uname -a
+          bash --version | head -n 1
+          python3 --version
 
       - name: Contributor validation
         run: ./scripts/dev-check.sh
@@ -25,7 +35,7 @@ jobs:
       - name: JACK-VM-GRANT-001 & dogfood harness unit tests
         run: python3 -m unittest discover -s scripts/dogfood -p "test_*.py" -v
 
-      - name: Isolated Ubuntu native smoke test
+      - name: Isolated Ubuntu native smoke test (${{ matrix.os }})
         run: |
           T="$(mktemp -d)"
           trap 'rm -rf "$T"' EXIT
