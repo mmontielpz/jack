@@ -65,5 +65,5 @@ For measured performance baselines, cryptographic architecture diagrams, cross-p
 2. **`012B` — Open Source & Product Readiness**: Repository productization, README V2, community health files, and case study.
 3. **`013` — Product UI/UX Research & Design**: Navigation unification, pairing code/endpoint ergonomics, and revocation UX design.
 4. **`014` — Product Improvements & Automated Qualification**: Implementation of `PERF-001`..`003`, `REL-001`..`002`, `ARCH-001`, and approved `013` UX improvements.
-5. **`015` — Family Dogfood & Native Acceptance (Final V0.2 Gate)**: Full physical cross-OS native acceptance across Linux, macOS (`arm64`), and Windows 11 prior to public release publication.
+5. **`015` — Family Dogfood & Native Acceptance (Final Current-Cycle Phase)**: Full physical cross-OS native acceptance across Linux, macOS (`arm64`), and Windows 11. `015` produces acceptance evidence only; it does not itself authorize any public release or JACK V1. Release and V1 readiness are separate, owner-approved decisions made afterward.
 - **Post-`015` Future Horizon**: Agent connectivity remains future roadmap work *after* `015` family acceptance and is out of scope for `012B`–`015`.

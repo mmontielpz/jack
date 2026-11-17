@@ -91,7 +91,7 @@ Every release candidate artifact for `v0.2.0-rc.1` was built from the single qua
 
 During mission `JACK-E2E-PERFORMANCE-AUDIT-012A`, isolated benchmarks ($N=30$ measured iterations after $5$ warmup iterations) were executed on CachyOS Linux (`kernel 7.3.4-1-cachyos x86_64`, AMD Ryzen 5 3600 6C/12T, 31 GiB RAM, `rustc 1.100.0`, `bash 5.3.20`) using disposable `/tmp` fixtures and `127.0.0.1` loopback sockets.
 
-> **Important Distinction**: All numbers in Tables 6.1 and 6.2 are **measured baseline results** on `c0d7cc33df0b7ca2d0da0c22f3d1a028d1bbb0da`. Expected improvements from remediating `PERF-001`–`PERF-004` are **proposed targets for mission `014`**, not yet implemented changes.
+> **Important Distinction**: All numbers in Tables 6.1 and 6.2 are **measured baseline results** on `c0d7cc33df0b7ca2d0da0c22f3d1a028d1bbb0da`. Expected improvements from remediating `PERF-001`–`PERF-004` (note: only `PERF-001`..`003` are defined in §7; the `PERF-004` definition was not recovered) are **proposed targets for mission `014`**, not yet implemented changes.
 
 ### 6.1 Measured CLI Latency Baseline (`bin/jack`, $N=30$, Warmup $=5$)
 | Command | `min` (ms) | `p50` (ms) | `p95` (ms) | `max` (ms) | `mean ± stdev` (ms) |
@@ -162,8 +162,8 @@ Why does a 2-round-trip pairing exchange take `82.987 ms` (`p50`) on `127.0.0.1`
    - Resolve navigation split (`UX-TECH-003`), streamline `IP:port` + Auth Code sharing/entry (`UX-TECH-002`), surface real peer hostnames (`UX-TECH-004`), and refine revocation/error states (`REL-002`).
 3. **`014` — Product Improvements & Automated Qualification**:
    - Implement `PERF-001` (`TCP_NODELAY` + coalesced frame writes), `PERF-002` (async IPC + lock release before I/O), `PERF-003` (debounced preflight), `REL-001`, `REL-002`, `ARCH-001`, `UX-TECH-001`, and approved `013` UX improvements with full regression tests.
-4. **`015` — Family Dogfood & Native Acceptance (Final V0.2 Gate)**:
-   - Execute full physical cross-OS native E2E (`Linux <-> macOS ARM64`, physical Windows 11, physical Ubuntu desktop, disconnect/revoke regression) and family acceptance prior to public release publication.
+4. **`015` — Family Dogfood & Native Acceptance (Final Current-Cycle Phase)**:
+   - Execute full physical cross-OS native E2E (`Linux <-> macOS ARM64`, physical Windows 11, physical Ubuntu desktop, disconnect/revoke regression) and family acceptance. This yields acceptance evidence for a separate, owner-approved release-readiness decision; it does not automatically authorize a release or JACK V1.
 5. **Post-`015` Horizons (`V0.3` → `V1.0` & Future Agent Connectivity)**:
    - **V0.3**: Persistent OS keystores (macOS Keychain & Linux `libsecret` / Argon2id fallback per `ADR-005`), Apple Developer ID notarization + Windows Authenticode, optional mDNS/QR discovery, and opt-in `workspace.read`.
    - **V1.0 & Beyond**: Independent external cryptographic audit (`ADR-009`), cross-NAT relay (`EP-006`), and future post-`015` agent connectivity over persistent multiplexed TLS 1.3 sessions.

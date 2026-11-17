@@ -51,18 +51,21 @@ JACK strictly distinguishes **CI build/smoke**, **KVM VM E2E**, and **physical h
 
 | Platform | CLI (`bin/jack`) | Desktop Preview (`0.1.0`) | CI Build & Smoke | Cross-Machine Native GUI E2E | Signing & Keystore Notes |
 |---|---|---|---|---|---|
-| **Arch Linux / CachyOS (`x86_64`)** | **Supported** | **Experimental RC** (`.AppImage`) | **PASS** (Local + CI suite) | **PASS** (Bidirectional `Linux <-> Win11 KVM VM` & `Physical macOS -> Linux`) | Ephemeral RAM keystore (`TD-004`); LAN Host requires explicit firewall rule if `ufw` is active (`TD-006`) |
+| **Arch Linux / CachyOS (`x86_64`)** | **Supported** | **Experimental RC** (`.AppImage`) | **PASS** (Local + CI suite) | **PASS** (Bidirectional `Linux <-> Win11 KVM VM` & `Physical macOS -> Linux`, historical qualification run; not final family acceptance) | Ephemeral RAM keystore (`TD-004`); LAN Host requires explicit firewall rule if `ufw` is active (`TD-006`) |
 | **Ubuntu 24.04 LTS (`x86_64`, incl. WSL2)** | **Supported** | **Experimental RC** (`.AppImage`, `.deb`) | **PASS** (`ubuntu-24.04` CLI + `xvfb-run` Desktop smoke) | **DEFERRED (`015`)** (Evaluated via headless CI `xvfb-run`; physical desktop GUI deferred) | Built against glibc 2.39; ephemeral RAM keystore |
 | **Ubuntu 26.04 LTS (`x86_64`)** | **Experimental RC** | **Experimental RC** (`.AppImage`, `.deb`) | **PASS** (`ubuntu-26.04` CLI + `xvfb-run` verification of 24.04 bundle) | **DEFERRED (`015`)** (Headless CI `xvfb-run` verified) | Uses `ubuntu-24.04`-built bundle for glibc compatibility |
 | **macOS 15.7.7 (`arm64` Apple Silicon)** | **Deferred for v0.2** (`v0.1.0`/`v0.1.1` tags available) | **Experimental RC** (`JACK Desktop_0.1.0_arm64.dmg`) | **PASS** (`macos-15` DMG build, `codesign --verify --deep --strict`, startup smoke) | **PARTIAL** (Physical M-series Mac `Host -> Linux Client` **PASS**; `Linux -> macOS` deferred to `015`) | Ad-hoc bundle-signed (`flags=0x2(adhoc)`), **not** Apple notarized (`System Settings → Privacy & Security → Open Anyway`) |
 | **Windows 11 (`x86_64`)** | **SSH Target Only** (or via WSL2 Ubuntu) | **Experimental RC** (`JACK Desktop_0.1.0_x64-setup.exe`) | **PASS** (`windows-latest` NSIS install, cold `26.8 MiB` / warm `29.8 MiB`, uninstall smoke) | **PARTIAL** (Bidirectional `Linux <-> Win11` KVM VM **PASS**; physical Windows 11 hardware deferred to `015`) | Persistent per-user Windows DPAPI keystore; unsigned NSIS preview installer |
 | **macOS Intel (`x86_64`)** | **Unqualified** | **Unqualified** (Manual `workflow_dispatch` only) | Manual build only | **NOT_TESTED** | Excluded from default PR CI matrix |
 
+> **Reading the E2E column**: `Physical macOS Host -> Linux Client` and `Linux <-> Windows 11 KVM VM` results are **historical qualification evidence** from earlier campaigns. They are not final family acceptance. Remaining native-hardware cells (`Linux -> macOS`, physical Windows 11, physical Ubuntu desktop) are **DEFERRED until `015`**; JACK makes no physical Windows 11 qualification claim.
+
 ### Version Reconciliation (`v0.2.0-rc.1` vs `0.1.1` vs `0.1.0`)
 During the V0.2 release-candidate campaign, three version identifiers coexist intentionally ([details in `docs/releases.md`](docs/releases.md#v02-release-candidate-version-reconciliation--policy-proposal-011-g4)):
 - **Repository Milestone**: `0.2.0-rc.1`
 - **CLI Authoritative Constant (`bin/jack`)**: `JACK_VERSION='0.1.1'` (preserved so deterministic offline CLI contract tests in `./scripts/dev-check.sh` remain invariant until an owner-authorized tag bump)
 - **Desktop & Easy Pairing Preview Bundles (`desktop/`, `easy-pairing/`)**: `0.1.0` (`JACK Desktop_0.1.0_amd64.AppImage`, `JACK Desktop_0.1.0_amd64.deb`, `JACK Desktop_0.1.0_arm64.dmg`, `JACK Desktop_0.1.0_x64-setup.exe`)
+- **Why screenshots show `jack 0.1.1`**: the Desktop title bar shows the output of `jack --version` (the CLI constant `JACK_VERSION`, `0.1.1`; `desktop/src/App.tsx` `TitleBar subtitle`), not the Desktop bundle version (`0.1.0`) or the milestone (`0.2.0-rc.1`). The screenshots were captured from `v0.2.0-rc.1` builds; no binary or version constant was altered for this documentation.
 
 ---
 
