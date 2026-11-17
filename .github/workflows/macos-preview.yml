@@ -1,0 +1,138 @@
+name: EP-005 macOS Preview Build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "easy-pairing/**"
+      - ".github/workflows/macos-preview.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  macos-preview:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            expected_lipo: arm64
+          - arch: x64
+            target: x86_64-apple-darwin
+            expected_lipo: x86_64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - name: Rust & Frontend checks
+        run: |
+          cd easy-pairing
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+          cd ../desktop
+          npm ci
+          npm run lint
+          npm run build
+          npm test -- --run
+          cd src-tauri
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Build macOS .app and .dmg (${{ matrix.target }})
+        run: |
+          cd desktop
+          npx tauri build --target "${{ matrix.target }}" --bundles dmg,app
+          mkdir -p ../dist-artifacts
+          cp "src-tauri/target/${{ matrix.target }}/release/bundle/dmg/"*.dmg ../dist-artifacts/
+
+      - name: Mount DMG, inspect bundle, verify arch/codesign, and run native smoke
+        run: |
+          set -euo pipefail
+          DMG_PATH="$(find dist-artifacts -maxdepth 1 -name '*.dmg' | head -n 1)"
+          test -s "$DMG_PATH"
+          MOUNT_DIR="$(mktemp -d)"
+          TMP_HOME="$(mktemp -d)"
+          cleanup() {
+            hdiutil detach "$MOUNT_DIR" -force >/dev/null 2>&1 || true
+            rm -rf "$MOUNT_DIR" "$TMP_HOME"
+          }
+          trap cleanup EXIT
+
+          hdiutil attach "$DMG_PATH" -mountpoint "$MOUNT_DIR" -nobrowse -readonly
+          APP_PATH="$(find "$MOUNT_DIR" -maxdepth 1 -name '*.app' | head -n 1)"
+          test -d "$APP_PATH"
+          BIN_PATH="$APP_PATH/Contents/MacOS/jack-desktop"
+          test -x "$BIN_PATH"
+          test -f "$APP_PATH/Contents/Info.plist"
+          test -f "$APP_PATH/Contents/Resources/icon.icns"
+
+          ARCH_INFO="$(lipo -archs "$BIN_PATH")"
+          FILE_INFO="$(file "$BIN_PATH")"
+          echo "ARCH_INFO=$ARCH_INFO"
+          echo "FILE_INFO=$FILE_INFO"
+          echo "$ARCH_INFO" | grep -q "${{ matrix.expected_lipo }}"
+
+          CODESIGN_OUT="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)"
+          echo "$CODESIGN_OUT"
+          SPCTL_OUT="$(spctl --assess --type execute --verbose=4 "$APP_PATH" 2>&1 || true)"
+          echo "$SPCTL_OUT"
+
+          # Attempt isolated binary launch smoke (headless CI runner may lack WindowServer GUI)
+          GUI_RUNTIME="NOT_TESTED"
+          mkdir -p "$TMP_HOME/.config/jack"
+          set +e
+          HOME="$TMP_HOME" JACK_HOME="$TMP_HOME/.config/jack" "$BIN_PATH" >/tmp/jack-macos-smoke.log 2>&1 &
+          APP_PID=$!
+          sleep 3
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "MACOS_BIN_ALIVE_3S=true"
+            kill "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          else
+            wait "$APP_PID"
+            RC=$?
+            echo "MACOS_BIN_EXITED_EARLY=$RC"
+          fi
+          set -e
+
+          {
+            echo "COMMIT_SHA=${{ github.sha }}"
+            echo "GITHUB_REF=${{ github.ref_name }}"
+            echo "TARGET=${{ matrix.target }}"
+            echo "RUNNER_OS=$(sw_vers -productName) $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "RUNNER_ARCH=$(uname -m)"
+            echo "RUSTC=$(rustc --version)"
+            echo "NODE=$(node --version)"
+            echo "XCODE=$(xcodebuild -version | tr '\n' ' ')"
+            echo "BINARY_ARCH=$ARCH_INFO"
+            echo "MACOS_GUI_RUNTIME=$GUI_RUNTIME"
+            echo "--- CODESIGN ---"
+            echo "$CODESIGN_OUT"
+            echo "--- SPCTL ---"
+            echo "$SPCTL_OUT"
+          } > "dist-artifacts/PROVENANCE-macos-${{ matrix.arch }}.txt"
+
+      - name: Generate macOS SHA-256 checksums
+        run: |
+          cd dist-artifacts
+          shasum -a 256 *.dmg > "SHA256SUMS-macos-${{ matrix.arch }}.txt"
+          cat "SHA256SUMS-macos-${{ matrix.arch }}.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jack-desktop-macos-${{ matrix.arch }}-preview
+          path: dist-artifacts/
