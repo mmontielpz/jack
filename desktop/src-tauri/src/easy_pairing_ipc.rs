@@ -415,7 +415,30 @@ pub fn decide_host_approval_impl(
         }
         let _ = tx.send(Ok(decision));
     }
-    thread::sleep(Duration::from_millis(30));
+    if approved {
+        for _ in 0..20 {
+            let done = {
+                let guard = state.host.lock().map_err(|_| "host mutex poisoned")?;
+                match *guard {
+                    Some(ref rt) => {
+                        rt.paired_peer_id
+                            .lock()
+                            .ok()
+                            .and_then(|g| g.clone())
+                            .is_some()
+                            || rt.last_error.lock().ok().and_then(|g| g.clone()).is_some()
+                    }
+                    None => true,
+                }
+            };
+            if done {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    } else {
+        thread::sleep(Duration::from_millis(30));
+    }
     poll_host_status_impl(state)
 }
 

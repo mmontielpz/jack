@@ -409,12 +409,93 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     await screen.findByRole("heading", { name: "Peer Authorized" });
+    expect(screen.getByText("Authorized")).toBeInTheDocument();
+    expect(screen.getByText("Authorized — active (status.read only)")).toBeInTheDocument();
     expect(screen.getByText("linux-client")).toBeInTheDocument();
     expect(screen.queryByText(/jack:ed25519:demo/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Revoke Access" }));
     await screen.findByRole("button", { name: "Add Device" });
     expect(revokeSpy).toHaveBeenCalledWith("jack:ed25519:demo");
+  });
+
+  it("shows Host Authorizing transitional state before protocol confirmation and shows feedback on Deny", async () => {
+    setupBaseMocks();
+    const pendingReq = {
+      request_id: "req-2",
+      peer_id: "jack:ed25519:demo2",
+      peer_name: "linux-client-2",
+      requested_scope: "status.read",
+      sas_6digit: "918 273",
+      expires_at: Math.floor(Date.now() / 1000) + 60,
+    };
+    vi.spyOn(jackApi, "epHostStartSharing").mockResolvedValue({
+      active: true,
+      state: "WaitingForRequest",
+      endpoint: "127.0.0.1:45123",
+      auth_code: "7K9M-2P4Q",
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    });
+    const pollSpy = vi
+      .spyOn(jackApi, "epHostPollStatus")
+      .mockResolvedValueOnce({
+        active: true,
+        state: "AwaitingApproval",
+        endpoint: "127.0.0.1:45123",
+        auth_code: "7K9M-2P4Q",
+        pending_request: pendingReq,
+      })
+      .mockResolvedValue({
+        active: true,
+        state: "Paired",
+        endpoint: "127.0.0.1:45123",
+        auth_code: "7K9M-2P4Q",
+        paired_peer_id: "jack:ed25519:demo2",
+        paired_peer_name: "linux-client-2",
+      });
+    // First Approve returns without paired_peer_id yet -> UI must show Authorizing, not flash back to Step 1
+    vi.spyOn(jackApi, "epHostDecideApproval")
+      .mockResolvedValueOnce({
+        active: true,
+        state: "AwaitingApproval",
+        endpoint: "127.0.0.1:45123",
+        auth_code: "7K9M-2P4Q",
+      })
+      .mockResolvedValueOnce({
+        active: true,
+        state: "WaitingForRequest",
+        endpoint: "127.0.0.1:45123",
+        auth_code: "7K9M-2P4Q",
+      });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Share This Device" }));
+    await screen.findByRole("heading", { name: "Approve Pairing Request" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await screen.findByRole("heading", { name: "Authorizing Device..." });
+    expect(screen.queryByRole("heading", { name: "Share This Device" })).toBeNull();
+
+    // Poll completes with paired_peer_id -> transitions to Peer Authorized
+    await screen.findByRole("heading", { name: "Peer Authorized" });
+    expect(pollSpy).toHaveBeenCalled();
+
+    // Verify Deny path feedback when a request is denied
+    pollSpy.mockResolvedValueOnce({
+      active: true,
+      state: "AwaitingApproval",
+      endpoint: "127.0.0.1:45123",
+      auth_code: "7K9M-2P4Q",
+      pending_request: pendingReq,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop Sharing" }));
+    await screen.findByRole("button", { name: "Share This Device" });
+    fireEvent.click(screen.getByRole("button", { name: "Share This Device" }));
+    await screen.findByRole("heading", { name: "Approve Pairing Request" });
+    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    await screen.findByText("Pairing request denied. Access was not granted.");
+    expect(screen.queryByRole("heading", { name: "Peer Authorized" })).toBeNull();
   });
 
   it("runs Client Add Device -> Normalize Code -> Verify SAS -> Connected -> Refresh -> Disconnect", async () => {

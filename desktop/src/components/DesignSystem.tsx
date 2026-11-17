@@ -67,8 +67,11 @@ export const GearIcon: React.FC = () => (
   </svg>
 );
 
-export const EpWizardSidebar: React.FC<{ activeStep: number }> = ({ activeStep }) => {
-  const steps = ["Pair", "Verify & Approve", "Connected"];
+export const EpWizardSidebar: React.FC<{ activeStep: number; mode?: "host" | "client" }> = ({
+  activeStep,
+  mode = "client",
+}) => {
+  const steps = ["Pair", "Verify & Approve", mode === "host" ? "Authorized" : "Connected"];
   return (
     <aside className="sidebar" aria-label="Easy Pairing steps">
       {steps.map((label, idx) => {

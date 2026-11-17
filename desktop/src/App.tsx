@@ -177,6 +177,7 @@ export function App() {
   const [epClientStatus, setEpClientStatus] = useState<ClientPairingStatus | null>(null);
   const [epLiveStatus, setEpLiveStatus] = useState<EpStatusReadResponse | null>(null);
   const [epBusy, setEpBusy] = useState(false);
+  const [epHostAuthorizing, setEpHostAuthorizing] = useState(false);
   const [epTick, setEpTick] = useState(0);
 
   const clearAutoAdvance = () => {
@@ -689,6 +690,9 @@ export function App() {
         .epHostPollStatus()
         .then((st) => {
           setHostShare(st);
+          if (st.paired_peer_id || st.error || !st.active) {
+            setEpHostAuthorizing(false);
+          }
           if (st.error) setErrorMsg(formatEpUserError(st.error));
         })
         .catch(() => {});
@@ -766,6 +770,8 @@ export function App() {
 
   const handleEpStartShare = async (bindIpOverride?: string) => {
     setEpBusy(true);
+    setEpHostAuthorizing(false);
+    setActionMsg(null);
     setErrorMsg(null);
     const chosenIp = bindIpOverride ?? epSelectedBindIp;
     try {
@@ -783,6 +789,7 @@ export function App() {
 
   const handleEpCancelShare = async () => {
     await jackApi.epHostStopSharing().catch(() => {});
+    setEpHostAuthorizing(false);
     setHostShare(null);
     setErrorMsg(null);
     setEpScreen("HOME");
@@ -790,11 +797,20 @@ export function App() {
 
   const handleEpDecideApproval = async (requestId: string, approved: boolean) => {
     setEpBusy(true);
+    setEpHostAuthorizing(approved);
+    setActionMsg(null);
     setErrorMsg(null);
     try {
       const st = await jackApi.epHostDecideApproval(requestId, approved);
       setHostShare(st);
+      if (!approved) {
+        setEpHostAuthorizing(false);
+        setActionMsg(EN.ep.deniedMsg);
+      } else if (st.paired_peer_id || st.error) {
+        setEpHostAuthorizing(false);
+      }
     } catch (err) {
+      setEpHostAuthorizing(false);
       setErrorMsg(formatEpUserError(err instanceof Error ? err.message : String(err)));
     } finally {
       setEpBusy(false);
@@ -960,7 +976,7 @@ export function App() {
   if (appState === "EASY_PAIRING") {
     const epStep =
       epScreen === "SHARE"
-        ? hostShare?.pending_request
+        ? hostShare?.pending_request || epHostAuthorizing
           ? 2
           : hostShare?.paired_peer_id
             ? 3
@@ -982,9 +998,10 @@ export function App() {
       <div className="app-shell">
         <TitleBar subtitle={cliVersion || undefined} showBrandText={false} />
         <div className="split-layout">
-          <EpWizardSidebar activeStep={epStep} />
+          <EpWizardSidebar activeStep={epStep} mode={epScreen === "SHARE" ? "host" : "client"} />
           <main className="main-pane" style={{ display: "flex", flexDirection: "column" }}>
             {errorMsg ? <div className="banner-error">{errorMsg}</div> : null}
+            {actionMsg ? <div className="banner-success">{actionMsg}</div> : null}
 
             {epScreen === "SHARE" && (
               hostShare?.pending_request ? (
@@ -1041,20 +1058,34 @@ export function App() {
                   <h2 className="pane-title">{EN.ep.peerAuthorizedTitle}</h2>
                   <p className="pane-subtitle">{EN.ep.peerAuthorizedSubtitle}</p>
                   <div
+                    role="status"
                     className="card-box"
                     style={{
-                      textAlign: "center",
-                      padding: 24,
+                      padding: 20,
                       background: "#ecfdf5",
                       border: "1px solid #86efac",
                       color: "#166534",
+                      marginBottom: 14,
                     }}
                   >
-                    <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12, textAlign: "center" }}>
                       {EN.ep.peerAuthorizedTitle}
                     </div>
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>
-                      {hostShare.paired_peer_name || "Paired Device"}
+                    <div className="review-row">
+                      <span>{EN.ep.requestingDevice}</span>
+                      <strong>{hostShare.paired_peer_name || "Paired Device"}</strong>
+                    </div>
+                    <div className="review-row">
+                      <span>Status</span>
+                      <strong>{EN.ep.peerAuthorizedStatus}</strong>
+                    </div>
+                    <div className="review-row">
+                      <span>{EN.ep.requestedScope}</span>
+                      <strong>{EN.ep.scopeStatusRead}</strong>
+                    </div>
+                    <div className="review-row">
+                      <span>{EN.ep.durationLabel}</span>
+                      <strong>{EN.ep.durationSession}</strong>
                     </div>
                   </div>
                   <div className="footer-actions" style={{ marginTop: "auto" }}>
@@ -1077,6 +1108,20 @@ export function App() {
                       onClick={() => void handleEpCancelShare()}
                     >
                       {EN.ep.stopSharing}
+                    </button>
+                  </div>
+                </>
+              ) : epHostAuthorizing ? (
+                <>
+                  <h2 className="pane-title">{EN.ep.authorizingTitle}</h2>
+                  <p className="pane-subtitle">{EN.ep.authorizingSubtitle}</p>
+                  <div className="footer-actions" style={{ marginTop: "auto" }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleEpCancelShare()}
+                    >
+                      {EN.ep.cancel}
                     </button>
                   </div>
                 </>
