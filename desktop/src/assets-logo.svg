@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="256" viewBox="0 0 760 256" role="img" aria-labelledby="title description">
+  <title id="title">JACK</title>
+  <desc id="description">J-shaped audio plug symbol beside original geometric JACK lettering on graphite.</desc>
+  <rect width="760" height="256" rx="24" fill="#181A1D"/>
+  <g id="mark">
+    <path d="M170 122V166C170 198 150 218 122 218S76 200 76 176" fill="none" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round"/>
+    <path d="M162 76V38L166 28H174L178 38V76Z" fill="#FFFFFF"/>
+    <path d="M162 48H178M162 60H178" fill="none" stroke="#181A1D" stroke-width="4"/>
+    <rect x="156" y="72" width="28" height="12" rx="3" fill="#FFFFFF"/>
+    <rect x="150" y="80" width="40" height="46" rx="8" fill="#FF6B00"/>
+  </g>
+  <g id="wordmark" transform="translate(280 80) scale(1.18)" fill="#FFFFFF">
+    <path d="M0 0H72V62Q72 96 38 96H28Q0 96 0 68V58H22V66Q22 76 32 76H38Q50 76 50 62V20H0Z"/>
+    <path fill-rule="evenodd" d="M88 96L118 0H148L178 96H154L148 74H118L112 96ZM124 54H142L133 22Z"/>
+    <path d="M266 0V22H224Q212 22 212 34V62Q212 74 224 74H266V96H222Q190 96 190 64V32Q190 0 222 0Z"/>
+    <path d="M284 0H306V37L338 0H366L324 47L368 96H338L306 59V96H284Z"/>
+  </g>
+</svg>

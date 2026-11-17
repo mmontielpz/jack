@@ -35,6 +35,24 @@ support for a published release series.
   OS labels are advisory. Discovery, daemon state and reachability do not prove
   SSH availability, authentication, or authorization. Doctor is diagnostic,
   not a security certification.
+- **Easy Pairing (`desktop/` + `easy-pairing/`, V0.2 Experimental Preview)**:
+  Uses an 8-character Crockford Base32 invitation code (`XXXX-XXXX`, 300s TTL,
+  single-use, max 5 attempts), SPAKE2 password-authenticated key exchange,
+  TLS 1.3 mutual authentication (`RFC 9266` exporter channel binding),
+  6-digit SAS comparison, and explicit Host human approval (`Approve` / `Deny`).
+  Capability grants in V0.2 are strictly limited to read-only `status.read` for
+  the active session (`This session` only) with instant Host revocation and
+  never grant shell execution or file access. On Windows, device keys use
+  per-user DPAPI (`CryptProtectData`); on macOS and Linux, V0.2 preview builds
+  hold ephemeral device identities in memory for the active session
+  (`InMemoryTestKeystore`) and never write plaintext keys to disk. This
+  cryptographic composition (`ADR-009`) has not yet undergone external
+  third-party cryptographic audit.
+- **Autonomous Dogfood Boundary (`JACK-VM-GRANT-001`)**: Local VM dogfooding
+  runs unprivileged (`qemu:///session`) and gates temporary `virbr0` host
+  firewall rules behind `jack-dogfood-net-helper`, which requires an
+  owner-signed, time-bounded HMAC-SHA256 capability token
+  ([docs/JACK-VM-GRANT-001.md](docs/JACK-VM-GRANT-001.md)).
 
 JACK does not harden endpoints, protect a compromised device, store/manage SSH
 credentials, or replace Tailscale/OpenSSH security maintenance. Keep those

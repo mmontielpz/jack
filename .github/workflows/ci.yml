@@ -4,7 +4,6 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
@@ -14,15 +13,29 @@ permissions:
   contents: read
 
 jobs:
-  checks:
-    runs-on: ubuntu-latest
+  ubuntu-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Record Ubuntu runner OS & kernel provenance
+        run: |
+          cat /etc/os-release
+          uname -a
+          bash --version | head -n 1
+          python3 --version
 
       - name: Contributor validation
         run: ./scripts/dev-check.sh
 
-      - name: Isolated Ubuntu native smoke test
+      - name: JACK-VM-GRANT-001 & dogfood harness unit tests
+        run: python3 -m unittest discover -s scripts/dogfood -p "test_*.py" -v
+
+      - name: Isolated Ubuntu native smoke test (${{ matrix.os }})
         run: |
           T="$(mktemp -d)"
           trap 'rm -rf "$T"' EXIT
@@ -32,3 +45,17 @@ jobs:
           HOME="$T/home" "$T/home/.local/bin/jack" add ci-box --non-interactive --yes --user ciuser --host 127.0.0.1
           HOME="$T/home" "$T/home/.local/bin/jack" doctor --json | grep -q '"supported":true'
           printf 'yes\n' | HOME="$T/home" "$T/home/.local/bin/jack" uninstall
+
+  checks:
+    name: checks
+    needs: [ubuntu-matrix]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enforce mandatory Ubuntu matrix checks
+        run: |
+          echo "ubuntu-matrix result: ${{ needs.ubuntu-matrix.result }}"
+          if [[ "${{ needs.ubuntu-matrix.result }}" != "success" ]]; then
+            echo "ERROR: Mandatory matrix check did not succeed (result=${{ needs.ubuntu-matrix.result }})" >&2
+            exit 1
+          fi

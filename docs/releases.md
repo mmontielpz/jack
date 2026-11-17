@@ -41,6 +41,23 @@ commands, config or installation behavior needs explicit migration guidance.
 A future 1.0 decision should establish the stable compatibility contract;
 this document does not claim that milestone or perpetual compatibility.
 
+### V0.2 Release Candidate Version Reconciliation & Policy Proposal (`011-G4`)
+
+During the `v0.2.0-rc.1` experimental release-candidate campaign (`candidate/jack-v0.2.0-rc1-009`), three version identifiers coexist intentionally:
+
+| Surface | Current Identifier | Purpose & Rationale |
+|---|---|---|
+| **Target Repository Milestone / RC Tag** | `0.2.0-rc.1` ([docs/release-notes-0.2.0-rc.1.md](release-notes-0.2.0-rc.1.md)) | Identifies the consolidated V0.2 campaign combining `v0.2.0` device-centric CLI features with the experimental JACK Desktop + Easy Pairing preview. |
+| **CLI Authoritative Constant (`bin/jack`)** | `JACK_VERSION='0.1.1'` | Preserves the latest published stable CLI constant (`v0.1.1`) so deterministic offline CLI contract assertions in `scripts/dev-check.sh` remain invariant until the owner authorizes a public CLI version bump. |
+| **Desktop & Easy Pairing Preview Bundles (`desktop/`, `easy-pairing/`)** | `0.1.0` | Identifies the first-generation experimental preview of the Tauri Desktop app and Rust `easy-pairing` crate (`JACK Desktop_0.1.0_amd64.AppImage`, `.deb`, `arm64.dmg`, `x64-setup.exe`). |
+
+Before changing public release semantics or cutting a public tag, maintainers select between two explicit policies:
+
+1. **Policy Option A — Split Subsystem SemVer (Recommended for `v0.2.0-rc.1` Experimental Preview)**:
+   - Keep `desktop/` and `easy-pairing/` at `0.1.0` during the V0.2 Experimental Preview series (preserving qualified artifact names `JACK Desktop_0.1.0_*` and historical dogfood/CI provenance), while `bin/jack` (`JACK_VERSION`) either remains `0.1.1` on the preview branch or bumps to `0.2.0-rc.1` / `0.2.0` together with `scripts/dev-check.sh` when cutting the CLI release tag.
+2. **Policy Option B — Unified Lockstep Monorepo SemVer (Recommended for `v0.2.0` Stable or `v0.3.0`)**:
+   - Update `bin/jack` (`JACK_VERSION`), `desktop/package.json`, `desktop/src-tauri/Cargo.toml`, `desktop/src-tauri/tauri.conf.json`, `easy-pairing/Cargo.toml`, `.github/workflows/macos-preview.yml` (`DMG_NAME`), and `scripts/dev-check.sh` in a single reviewed commit so every CLI and Desktop artifact reports the exact same SemVer string (`0.2.0` or `0.3.0-rc.1`).
+
 ## Release checklist
 
 Before a maintainer approves a future release:
