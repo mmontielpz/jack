@@ -1,8 +1,6 @@
 name: EP-005 macOS Preview Build
 
 on:
-  push:
-    branches: ["candidate/**"]
   pull_request:
     paths:
       - "desktop/**"
@@ -16,6 +14,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -28,12 +30,10 @@ jobs:
           - arch: arm64
             target: aarch64-apple-darwin
             expected_lipo: arm64
-            enabled: true
           - arch: x64
             target: x86_64-apple-darwin
             expected_lipo: x86_64
-            enabled: ${{ github.event_name == 'workflow_dispatch' && inputs.include_x64 == true }}
-    if: ${{ matrix.enabled }}
+    if: ${{ matrix.arch != 'x64' || (github.event_name == 'workflow_dispatch' && inputs.include_x64 == true) }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
