@@ -8,6 +8,7 @@ on:
       - "desktop/**"
       - "easy-pairing/**"
       - ".github/workflows/ep005-crossplatform-preview.yml"
+      - ".github/workflows/macos-preview.yml"
   workflow_dispatch:
 
 concurrency:

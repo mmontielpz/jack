@@ -22,18 +22,7 @@ permissions:
   contents: read
 
 jobs:
-  macos-preview:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            target: aarch64-apple-darwin
-            expected_lipo: arm64
-          - arch: x64
-            target: x86_64-apple-darwin
-            expected_lipo: x86_64
-    if: ${{ matrix.arch != 'x64' || github.event.inputs.include_x64 == 'true' }}
+  macos-arm64-preview:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +33,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
           components: rustfmt, clippy
       - uses: actions/cache@v4
         with:
@@ -54,9 +43,9 @@ jobs:
             ~/.cargo/git/db/
             easy-pairing/target/
             desktop/src-tauri/target/
-          key: macos-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          key: macos-cargo-aarch64-apple-darwin-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
-            macos-cargo-${{ matrix.target }}-
+            macos-cargo-aarch64-apple-darwin-
 
       - name: Rust & Frontend checks
         run: |
@@ -74,14 +63,13 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test
 
-      - name: Build, ad-hoc bundle-sign, and package macOS .app and .dmg (${{ matrix.target }})
+      - name: Build, ad-hoc bundle-sign, and package macOS .app and .dmg (aarch64-apple-darwin)
         run: |
           set -euo pipefail
           cd desktop
-          npx tauri build --target "${{ matrix.target }}" --bundles app
-          APP_BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle/macos/JACK Desktop.app"
+          npx tauri build --target aarch64-apple-darwin --bundles app
+          APP_BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/JACK Desktop.app"
           test -d "$APP_BUNDLE"
-          # Replace linker-only signature with a complete ad-hoc bundle signature sealing Info.plist & Resources
           codesign --force --deep --sign - "$APP_BUNDLE"
           codesign --verify --deep --strict --verbose=4 "$APP_BUNDLE"
 
@@ -91,7 +79,7 @@ jobs:
           ln -s /Applications "$STAGING/Applications"
 
           mkdir -p ../dist-artifacts
-          DMG_NAME="JACK Desktop_0.1.0_${{ matrix.expected_lipo }}.dmg"
+          DMG_NAME="JACK Desktop_0.1.0_arm64.dmg"
           hdiutil create -volname "JACK Desktop" -srcfolder "$STAGING" -ov -format UDZO "../dist-artifacts/$DMG_NAME"
 
       - name: Mount DMG, inspect bundle, verify arch/codesign, and run native smoke
@@ -120,7 +108,7 @@ jobs:
           FILE_INFO="$(file "$BIN_PATH")"
           echo "ARCH_INFO=$ARCH_INFO"
           echo "FILE_INFO=$FILE_INFO"
-          echo "$ARCH_INFO" | grep -q "${{ matrix.expected_lipo }}"
+          echo "$ARCH_INFO" | grep -q "arm64"
 
           codesign --verify --deep --strict --verbose=4 "$APP_PATH"
           CODESIGN_OUT="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)"
@@ -148,7 +136,7 @@ jobs:
           {
             echo "COMMIT_SHA=${{ github.sha }}"
             echo "GITHUB_REF=${{ github.ref_name }}"
-            echo "TARGET=${{ matrix.target }}"
+            echo "TARGET=aarch64-apple-darwin"
             echo "RUNNER_OS=$(sw_vers -productName) $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
             echo "RUNNER_ARCH=$(uname -m)"
             echo "RUSTC=$(rustc --version)"
@@ -160,15 +148,51 @@ jobs:
             echo "$CODESIGN_OUT"
             echo "--- SPCTL ---"
             echo "$SPCTL_OUT"
-          } > "dist-artifacts/PROVENANCE-macos-${{ matrix.arch }}.txt"
+          } > "dist-artifacts/PROVENANCE-macos-arm64.txt"
 
       - name: Generate macOS SHA-256 checksums
         run: |
           cd dist-artifacts
-          shasum -a 256 *.dmg > "SHA256SUMS-macos-${{ matrix.arch }}.txt"
-          cat "SHA256SUMS-macos-${{ matrix.arch }}.txt"
+          shasum -a 256 *.dmg > "SHA256SUMS-macos-arm64.txt"
+          cat "SHA256SUMS-macos-arm64.txt"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: jack-desktop-macos-${{ matrix.arch }}-preview
+          name: jack-desktop-macos-arm64-preview
+          path: dist-artifacts/
+
+  macos-x64-preview:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.include_x64 == 'true' }}
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+          components: rustfmt, clippy
+      - name: Build, ad-hoc bundle-sign, and package macOS Intel .dmg (x86_64-apple-darwin)
+        run: |
+          set -euo pipefail
+          cd desktop
+          npm ci
+          npx tauri build --target x86_64-apple-darwin --bundles app
+          APP_BUNDLE="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/JACK Desktop.app"
+          codesign --force --deep --sign - "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=4 "$APP_BUNDLE"
+          STAGING="$(mktemp -d)"
+          trap 'rm -rf "$STAGING"' EXIT
+          cp -R "$APP_BUNDLE" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          mkdir -p ../dist-artifacts
+          hdiutil create -volname "JACK Desktop" -srcfolder "$STAGING" -ov -format UDZO "../dist-artifacts/JACK Desktop_0.1.0_x86_64.dmg"
+          cd ../dist-artifacts
+          shasum -a 256 *.dmg > "SHA256SUMS-macos-x64.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jack-desktop-macos-x64-preview
           path: dist-artifacts/
