@@ -52,12 +52,25 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test
 
-      - name: Build macOS .app and .dmg (${{ matrix.target }})
+      - name: Build, ad-hoc bundle-sign, and package macOS .app and .dmg (${{ matrix.target }})
         run: |
+          set -euo pipefail
           cd desktop
-          npx tauri build --target "${{ matrix.target }}" --bundles dmg,app
+          npx tauri build --target "${{ matrix.target }}" --bundles app
+          APP_BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle/macos/JACK Desktop.app"
+          test -d "$APP_BUNDLE"
+          # Replace linker-only signature with a complete ad-hoc bundle signature sealing Info.plist & Resources
+          codesign --force --deep --sign - "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=4 "$APP_BUNDLE"
+
+          STAGING="$(mktemp -d)"
+          trap 'rm -rf "$STAGING"' EXIT
+          cp -R "$APP_BUNDLE" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+
           mkdir -p ../dist-artifacts
-          cp "src-tauri/target/${{ matrix.target }}/release/bundle/dmg/"*.dmg ../dist-artifacts/
+          DMG_NAME="JACK Desktop_0.1.0_${{ matrix.expected_lipo }}.dmg"
+          hdiutil create -volname "JACK Desktop" -srcfolder "$STAGING" -ov -format UDZO "../dist-artifacts/$DMG_NAME"
 
       - name: Mount DMG, inspect bundle, verify arch/codesign, and run native smoke
         run: |
@@ -79,6 +92,7 @@ jobs:
           test -x "$BIN_PATH"
           test -f "$APP_PATH/Contents/Info.plist"
           test -f "$APP_PATH/Contents/Resources/icon.icns"
+          test -f "$APP_PATH/Contents/_CodeSignature/CodeResources"
 
           ARCH_INFO="$(lipo -archs "$BIN_PATH")"
           FILE_INFO="$(file "$BIN_PATH")"
@@ -86,6 +100,7 @@ jobs:
           echo "FILE_INFO=$FILE_INFO"
           echo "$ARCH_INFO" | grep -q "${{ matrix.expected_lipo }}"
 
+          codesign --verify --deep --strict --verbose=4 "$APP_PATH"
           CODESIGN_OUT="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)"
           echo "$CODESIGN_OUT"
           SPCTL_OUT="$(spctl --assess --type execute --verbose=4 "$APP_PATH" 2>&1 || true)"
