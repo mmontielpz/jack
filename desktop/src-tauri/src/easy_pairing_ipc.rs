@@ -619,7 +619,25 @@ pub fn client_read_status_impl(state: &EasyPairingState) -> Result<StatusReadRes
         .lock()
         .map_err(|_| "pk mutex poisoned")?
         .ok_or("Host not paired")?;
-    client_invoke_capability(addr, &rt.client_id, hpk, "status.read").map_err(|e| e.to_string())
+    match client_invoke_capability(addr, &rt.client_id, hpk, "status.read") {
+        Ok(resp) => {
+            if let Ok(mut st) = rt.last_status.lock() {
+                *st = Some(resp.clone());
+            }
+            Ok(resp)
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            // Fail closed so a revoked or dropped session never remains "Connected".
+            if let Ok(mut st) = rt.stage.lock() {
+                *st = "Error".into();
+            }
+            if let Ok(mut err) = rt.last_error.lock() {
+                *err = Some(msg.clone());
+            }
+            Err(msg)
+        }
+    }
 }
 
 pub fn client_disconnect_impl(state: &EasyPairingState) -> Result<(), String> {
@@ -724,9 +742,12 @@ mod tests {
         // Subsequent status.read succeeds
         assert_eq!(client_read_status_impl(&state).unwrap().status, "ok");
 
-        // Host revokes peer -> subsequent status.read fails
+        // Host revokes peer -> subsequent status.read fails and client fails closed
         revoke_host_peer_impl(&state, paired_id).unwrap();
         assert!(client_read_status_impl(&state).is_err());
+        let c_after_revoke = poll_client_status_impl(&state).unwrap();
+        assert_eq!(c_after_revoke.stage, "Error");
+        assert!(c_after_revoke.error.is_some());
 
         client_disconnect_impl(&state).unwrap();
         stop_host_sharing_impl(&state).unwrap();

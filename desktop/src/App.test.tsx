@@ -462,6 +462,48 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
     await screen.findByRole("button", { name: "Add Device" });
   });
 
+  it("reconciles Connected UI on host revocation, fails closed, and allows retry", async () => {
+    setupBaseMocks();
+    vi.spyOn(jackApi, "epClientStartPairing").mockResolvedValue({
+      stage: "VerifySas",
+      sas_6digit: "482 910",
+    });
+    vi.spyOn(jackApi, "epClientConfirmSas").mockResolvedValue({
+      stage: "Connected",
+      host_id: "jack:ed25519:host123",
+      status_read: { status: "ok", os: "linux", jack_version: "0.1.0", uptime_seconds: 5 },
+    });
+    const readSpy = vi
+      .spyOn(jackApi, "epClientReadStatus")
+      .mockRejectedValue(new Error("ERR_REVOKED: peer access revoked"));
+    const disconnectSpy = vi.spyOn(jackApi, "epClientDisconnect").mockResolvedValue();
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Device" }));
+    fireEvent.change(screen.getByLabelText("Temporary Auth Code"), { target: { value: "7K9M-2P4Q" } });
+    fireEvent.change(screen.getByLabelText("Host Address (LAN or Loopback)"), { target: { value: "127.0.0.1:45123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await screen.findByRole("heading", { name: "Step 1: Confirm 6-Digit Code" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Codes Match — Request Access" }));
+    await screen.findByRole("heading", { name: "Connected" });
+
+    // Wait for bounded reconciliation tick (2500ms) to detect revocation and fail closed
+    await waitFor(
+      () => {
+        expect(readSpy).toHaveBeenCalled();
+        expect(disconnectSpy).toHaveBeenCalled();
+        expect(screen.getByText("Access was revoked by the host.")).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Add Device" })).toBeInTheDocument();
+      },
+      { timeout: 4500 },
+    );
+
+    // Retry with a new code is possible from ENTER_CODE
+    expect(screen.getByRole("button", { name: "Connect" })).not.toBeDisabled();
+  });
+
   it("handles SAS mismatch and wrong/expired code errors without showing Connected", async () => {
     setupBaseMocks();
     vi.spyOn(jackApi, "epClientStartPairing").mockResolvedValue({

@@ -65,8 +65,39 @@ pub fn ensure_lan_or_loopback(addr: SocketAddr) -> Result<(), JackError> {
     Ok(())
 }
 
+/// Parse Linux `/proc/net/fib_trie` for `/32 host LOCAL` IPv4 addresses,
+/// keeping only non-loopback RFC1918 / link-local / CGNAT addresses.
+pub fn parse_linux_fib_trie_local_ips(contents: &str) -> Vec<std::net::IpAddr> {
+    let mut found = Vec::new();
+    let mut prev_line = "";
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("/32 host LOCAL") {
+            if let Some(raw_ip) = prev_line.trim().strip_prefix("|-- ") {
+                if let Ok(ip) = raw_ip.trim().parse::<std::net::IpAddr>() {
+                    if !ip.is_loopback() && is_lan_or_loopback_ip(ip) && !found.contains(&ip) {
+                        found.push(ip);
+                    }
+                }
+            }
+        }
+        prev_line = line;
+    }
+    found
+}
+
 pub fn detect_local_lan_ips() -> Vec<std::net::IpAddr> {
     let mut found = Vec::new();
+
+    #[cfg(target_os = "linux")]
+    if let Ok(fib_trie) = std::fs::read_to_string("/proc/net/fib_trie") {
+        for ip in parse_linux_fib_trie_local_ips(&fib_trie) {
+            if !found.contains(&ip) {
+                found.push(ip);
+            }
+        }
+    }
+
     for probe in [
         "192.168.255.254:80",
         "10.255.255.254:80",
@@ -327,4 +358,59 @@ pub fn build_tls13_pinned_client_config(
 ) -> Result<Arc<ClientConfig>, JackError> {
     let dummy = Arc::new(Mutex::new(None));
     build_tls13_pairing_client_config(id, Some(expected_host_pk), dummy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn fib_trie_includes_virtual_bridge_and_rejects_public_and_loopback() {
+        let sample = r#"
+Main:
+  +-- 0.0.0.0/0 0 0 0
+     |-- 127.0.0.0
+        /8 link UNICAST
+     |-- 127.0.0.1
+        /32 host LOCAL
+     |-- 192.168.1.100
+        /32 host LOCAL
+     |-- 192.168.122.0
+        /24 link UNICAST
+     |-- 192.168.122.1
+        /32 host LOCAL
+     |-- 172.17.0.1
+        /32 host LOCAL
+     |-- 100.90.245.116
+        /32 host LOCAL
+     |-- 203.0.113.10
+        /32 host LOCAL
+     |-- 8.8.8.8
+        /32 host LOCAL
+     |-- 0.0.0.0
+        /32 host LOCAL
+"#;
+        let ips = parse_linux_fib_trie_local_ips(sample);
+        assert!(ips.contains(&"192.168.1.100".parse::<IpAddr>().unwrap()));
+        assert!(ips.contains(&"192.168.122.1".parse::<IpAddr>().unwrap()));
+        assert!(ips.contains(&"172.17.0.1".parse::<IpAddr>().unwrap()));
+        assert!(ips.contains(&"100.90.245.116".parse::<IpAddr>().unwrap()));
+        assert!(!ips.contains(&"127.0.0.1".parse::<IpAddr>().unwrap()));
+        assert!(!ips.contains(&"203.0.113.10".parse::<IpAddr>().unwrap()));
+        assert!(!ips.contains(&"8.8.8.8".parse::<IpAddr>().unwrap()));
+        assert!(!ips.contains(&"0.0.0.0".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn lan_or_loopback_rejects_public_ips() {
+        assert!(is_lan_or_loopback_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_lan_or_loopback_ip("192.168.122.1".parse().unwrap()));
+        assert!(is_lan_or_loopback_ip("10.0.0.5".parse().unwrap()));
+        assert!(is_lan_or_loopback_ip("172.16.0.1".parse().unwrap()));
+        assert!(is_lan_or_loopback_ip("100.64.0.1".parse().unwrap()));
+        assert!(!is_lan_or_loopback_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_lan_or_loopback_ip("203.0.113.10".parse().unwrap()));
+        assert!(!is_lan_or_loopback_ip("0.0.0.0".parse().unwrap()));
+    }
 }

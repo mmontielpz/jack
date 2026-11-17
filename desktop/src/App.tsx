@@ -724,6 +724,46 @@ export function App() {
     return () => window.clearInterval(id);
   }, [appState, epScreen, epClientStatus?.stage]);
 
+  // Bounded session-state reconciliation while Connected so host revocation/stop fails closed.
+  useEffect(() => {
+    if (
+      appState !== "EASY_PAIRING" ||
+      epScreen !== "CONNECTED" ||
+      epClientStatus?.stage !== "Connected"
+    ) {
+      return;
+    }
+    if (new URLSearchParams(window.location.search).has("ep")) return; // static preview
+    let cancelled = false;
+    let inFlight = false;
+    const id = window.setInterval(() => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      void jackApi
+        .epClientReadStatus()
+        .then((res) => {
+          if (cancelled) return;
+          setEpLiveStatus(res);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          const raw = err instanceof Error ? err.message : String(err);
+          void jackApi.epClientDisconnect().catch(() => {});
+          setEpLiveStatus(null);
+          setEpClientStatus({ stage: "Error", error: raw });
+          setErrorMsg(formatEpUserError(raw));
+          setEpScreen("ENTER_CODE");
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [appState, epScreen, epClientStatus?.stage]);
+
   const handleEpStartShare = async (bindIpOverride?: string) => {
     setEpBusy(true);
     setErrorMsg(null);
