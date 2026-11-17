@@ -11,9 +11,10 @@ Stable release: [v0.1.1](https://github.com/mmontielpz/jack/releases/tag/v0.1.1)
 - Configure destinations with guided `jack setup` (direct SSH or optional Tailscale), `jack add <alias>`, or a plain configuration file.
 - Diagnose prerequisites and reachability with `jack doctor`, `jack diagnose`, and `jack status [alias]`.
 
-Supported client installation targets for v0.2.0: **Arch Linux / CachyOS** and **Ubuntu Linux (including Ubuntu on WSL2)**.
-**macOS** native remains deferred and unqualified for v0.2.0; native Windows and other Linux distributions are not supported client installation paths (Windows hosts can be registered as remote SSH/Tailscale destinations).
-JACK provides terminal access, not remote desktop. It relies on your existing
+Supported CLI (`bin/jack`) client installation targets for v0.2.0: **Arch Linux / CachyOS** and **Ubuntu Linux (24.04 LTS / 26.04 LTS, including Ubuntu on WSL2)**.
+**macOS** CLI native qualification remains deferred for v0.2.0 (`v0.1.0`/`v0.1.1` CLI tags remain available); native Windows and other Linux distributions are not supported CLI client installation paths (Windows hosts can be registered as remote SSH/Tailscale destinations).
+In addition, **JACK Desktop + Easy Pairing (`desktop/` + `easy-pairing/`, bundle version `0.1.0`)** is available as an **Experimental Release Candidate Preview (`v0.2.0-rc.1`)** across Linux (`.AppImage` / `.deb`), macOS Apple Silicon (`arm64` `.dmg`, ad-hoc bundle-signed), and Windows 11 (`x86_64` NSIS `.exe`, KVM VM qualified) for read-only `status.read` local/LAN pairing; see [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/release-notes-0.2.0-rc.1.md](docs/release-notes-0.2.0-rc.1.md).
+JACK CLI provides terminal access, not remote desktop, and relies on your existing
 OpenSSH and optional Tailscale authentication and authorization.
 
 ## Quick Start (Arch / CachyOS)
@@ -63,7 +64,7 @@ when a destination is unused or unreachable, even if the other is usable.
 - [Security policy](SECURITY.md): trust boundaries and private vulnerability reporting.
 - [Contributing](CONTRIBUTING.md): offline checks, bugs, proposals and pull requests.
 - [Release policy](docs/releases.md): exact released source, versioning and acceptance.
-- [v0.2.0-rc.1 experimental RC notes](docs/release-notes-0.2.0-rc.1.md) & [v0.1.0 release notes](docs/release-notes-0.1.0.md): evidence and accepted limitations.
+- [v0.2.0-rc.1 experimental RC notes](docs/release-notes-0.2.0-rc.1.md), [v0.1.1 release notes](docs/release-notes-0.1.1.md), & [v0.1.0 release notes](docs/release-notes-0.1.0.md): evidence and accepted limitations.
 - [Brand guidelines](docs/branding.md): vector assets, palette, provenance and usage.
 
 ## License

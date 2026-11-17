@@ -67,6 +67,7 @@ origin/main (eccdc25)
 | `TD-007` | **P2** | Dogfood Net Helper Setup | `jack-dogfood-net-helper` requires optional one-time owner `sudoers` installation for passwordless `virbr0` rule (`docs/JACK-VM-GRANT-001.md`) | **By Design (`G1`)** — Agent never auto-edits `/etc/sudoers.d` |
 | `TD-008` | **P3** | GitHub Actions Node 20 Warning | Upstream `actions/checkout@v4`, `actions/setup-node@v4`, `actions/upload-artifact@v4` emit Node 20->24 deprecation notices on runners | **Non-blocking** — Actions run on Node 24 automatically; upgrade to `@v5` when upstream releases |
 | `TD-009` | **P3** | Repo Hygiene | Python `__pycache__/` and `*.pyc` were untracked in dogfood worktrees | **Resolved in `009B`** — Added to `.gitignore` |
+| `TD-010` | **P1** | CI / Branch Protection & Supply Chain | Required status context `"checks"` (`CI/checks`) was replaced by matrix job names, and third-party actions used mutable tags | **Resolved in `010B`/`011` (`7b09863`)** — Added fail-closed `checks` aggregator job in `ci.yml`, pinned all third-party actions to full commit SHAs, deduplicated PR triggers, and set 14-day PR artifact retention |
 
 ---
 

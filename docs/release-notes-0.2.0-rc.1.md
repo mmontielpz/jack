@@ -5,9 +5,10 @@
 ## 1. Candidate Identity & Scope
 
 - **Candidate Branch**: `candidate/jack-v0.2.0-rc1-009`
-- **Reference Baseline**: `f81e71a5cae0f60f9cb7489f5cee8d394d950c57` (consolidating `origin/main` `eccdc25`, `origin/develop` `702101f`, and stacked PRs `#32`–`#44`)
-- **CLI Authoritative Constant**: `bin/jack` (`JACK_VERSION='0.1.1'`, preserved for existing CLI contract tests until owner authorizes final version constant bump)
-- **Desktop & Easy Pairing Crate Version**: `0.1.0` (Experimental Preview)
+- **Consolidated Lineage**: Integrates `origin/main` (`eccdc25`), `origin/develop` (`702101f`), stacked PRs `#32`–`#44` (`f81e71a`), RC consolidation (`263cc5e`, PR `#45`), and CI/GitHub hygiene (`7b09863`, PR `#46`).
+- **Target Repository Milestone Version**: `0.2.0-rc.1` (`EXPERIMENTAL_RC`)
+- **CLI Authoritative Constant**: `bin/jack` (`JACK_VERSION='0.1.1'`, preserved for existing CLI contract tests until the owner selects Policy Option A or Option B in [docs/releases.md](releases.md#v02-release-candidate-version-reconciliation--policy-proposal-011-g4))
+- **Desktop & Easy Pairing Preview Bundle Version**: `0.1.0` (`desktop/package.json`, `desktop/src-tauri/Cargo.toml`, `desktop/src-tauri/tauri.conf.json`, `easy-pairing/Cargo.toml` — Experimental Preview)
 
 ### Key Capabilities Included
 1. **Device-Centric CLI (`bin/jack`)**:
@@ -42,6 +43,7 @@
 2. **Non-Windows Ephemeral Keystore (`TD-004`)**: On macOS and Linux, Easy Pairing device identities are held in memory for the active session (`InMemoryTestKeystore`). Windows uses persistent per-user DPAPI (`CryptProtectData`).
 3. **Host Firewall Rules (`TD-006`)**: JACK Desktop never edits host firewalls (`ufw`, Windows Defender, macOS Application Firewall). Hosting Easy Pairing on a non-loopback LAN/bridge interface requires the host firewall to permit incoming TCP connections from the peer to the displayed ephemeral port.
 4. **macOS Intel (`x86_64`)**: Removed from default PR CI matrix; available via manual `workflow_dispatch` (`include_x64=true`) only and unqualified on physical Intel hardware.
+5. **Dogfood Network Helper (`TD-007`) & Upstream Action Node Runtime Notice (`TD-008`)**: `jack-dogfood-net-helper` requires an explicit owner-signed `JACK-VM-GRANT-001` token (`docs/JACK-VM-GRANT-001.md`) for temporary `virbr0` firewall rules; SHA-pinned `@v4` GitHub Actions emit non-blocking upstream Node 20 deprecation notices until `@v5` releases.
 
 ---
 
