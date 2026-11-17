@@ -38,6 +38,41 @@ import {
 } from "./components/DesignSystem";
 import { EN } from "./i18n/en";
 
+function formatEpUserError(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("err_pake_binding_failed") || lower.includes("invalid") && lower.includes("code")) {
+    return "Invalid or expired Auth Code. Check the code and try again.";
+  }
+  if (lower.includes("err_invite_expired") || lower.includes("expired")) {
+    return "This Auth Code has expired. Generate a new code and try again.";
+  }
+  if (lower.includes("err_approval_denied")) {
+    return "The host denied this pairing request.";
+  }
+  if (lower.includes("err_approval_timeout")) {
+    return "Approval timed out on the host. Please try again.";
+  }
+  if (lower.includes("err_sas_mismatch") || lower.includes("did not match")) {
+    return "Verification codes did not match. Pairing cancelled.";
+  }
+  if (lower.includes("err_loopback_only") || lower.includes("err_invalid_input")) {
+    return "Enter a valid local loopback address (for example, 127.0.0.1:45123).";
+  }
+  if (lower.includes("err_revoked")) {
+    return "Access was revoked by the host.";
+  }
+  if (lower.includes("disconnected before completing")) {
+    return "The other device cancelled pairing. You can try again or regenerate the code.";
+  }
+  if (lower.includes("err_io") || lower.includes("timed out") || lower.includes("os error 11")) {
+    return "Pairing connection timed out or was interrupted. Please try again.";
+  }
+  if (lower.startsWith("err_")) {
+    return "Pairing could not be completed. Please try again.";
+  }
+  return raw;
+}
+
 type AppState = "EASY_PAIRING" | "ONBOARDING" | "DASHBOARD" | "DIAGNOSTICS" | "SETTINGS";
 type EpScreen = "HOME" | "SHARE" | "ENTER_CODE" | "VERIFY_SAS" | "CONNECTED";
 type OnboardingStage = "WELCOME" | "S1" | "S2" | "S3" | "S4";
@@ -372,7 +407,7 @@ export function App() {
         } else if (epParam === "error") {
           setAppState("EASY_PAIRING");
           setEpScreen("ENTER_CODE");
-          setErrorMsg("ERR_INVITE_EXPIRED");
+          setErrorMsg(formatEpUserError("ERR_INVITE_EXPIRED"));
         } else if (stateParam === "dashboard") {
           setAppState("DASHBOARD");
         } else if (stateParam === "diagnostics") {
@@ -643,7 +678,7 @@ export function App() {
         .epHostPollStatus()
         .then((st) => {
           setHostShare(st);
-          if (st.error) setErrorMsg(st.error);
+          if (st.error) setErrorMsg(formatEpUserError(st.error));
         })
         .catch(() => {});
     }, 400);
@@ -668,10 +703,12 @@ export function App() {
             setEpLiveStatus(st.status_read ?? null);
             setEpScreen("CONNECTED");
           } else if (st.stage === "Error" && st.error) {
-            setErrorMsg(st.error);
+            setErrorMsg(formatEpUserError(st.error));
           }
         })
-        .catch((err) => setErrorMsg(err instanceof Error ? err.message : String(err)));
+        .catch((err) =>
+          setErrorMsg(formatEpUserError(err instanceof Error ? err.message : String(err))),
+        );
     }, 300);
     return () => window.clearInterval(id);
   }, [appState, epScreen, epClientStatus?.stage]);
@@ -684,7 +721,7 @@ export function App() {
       setHostShare(st);
       setEpScreen("SHARE");
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorMsg(formatEpUserError(err instanceof Error ? err.message : String(err)));
     } finally {
       setEpBusy(false);
     }
@@ -704,7 +741,7 @@ export function App() {
       const st = await jackApi.epHostDecideApproval(requestId, approved);
       setHostShare(st);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorMsg(formatEpUserError(err instanceof Error ? err.message : String(err)));
     } finally {
       setEpBusy(false);
     }
@@ -720,7 +757,7 @@ export function App() {
       setActionMsg("Access revoked.");
       setEpScreen("HOME");
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorMsg(formatEpUserError(err instanceof Error ? err.message : String(err)));
     } finally {
       setEpBusy(false);
     }
@@ -737,7 +774,7 @@ export function App() {
       );
       setEpClientStatus(st);
       if (st.stage === "Error") {
-        setErrorMsg(st.error ?? "Pairing failed.");
+        setErrorMsg(formatEpUserError(st.error ?? "Pairing failed."));
       } else if (st.stage === "VerifySas") {
         setEpScreen("VERIFY_SAS");
       } else if (st.stage === "Connected") {
@@ -745,7 +782,7 @@ export function App() {
         setEpScreen("CONNECTED");
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorMsg(formatEpUserError(err instanceof Error ? err.message : String(err)));
     } finally {
       setEpBusy(false);
     }
@@ -769,10 +806,10 @@ export function App() {
         setEpLiveStatus(st.status_read ?? null);
         setEpScreen("CONNECTED");
       } else if (st.stage === "Error") {
-        setErrorMsg(st.error ?? "Pairing failed.");
+        setErrorMsg(formatEpUserError(st.error ?? "Pairing failed."));
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorMsg(formatEpUserError(err instanceof Error ? err.message : String(err)));
     } finally {
       setEpBusy(false);
     }
@@ -785,8 +822,9 @@ export function App() {
       const res = await jackApi.epClientReadStatus();
       setEpLiveStatus(res);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
-      setEpClientStatus({ stage: "Error", error: err instanceof Error ? err.message : String(err) });
+      const raw = err instanceof Error ? err.message : String(err);
+      setErrorMsg(formatEpUserError(raw));
+      setEpClientStatus({ stage: "Error", error: raw });
       setEpScreen("ENTER_CODE");
     } finally {
       setEpBusy(false);
@@ -971,21 +1009,43 @@ export function App() {
                     </div>
                     <div
                       style={{
-                        fontSize: 34,
+                        fontSize: 36,
                         fontWeight: 800,
                         letterSpacing: 4,
                         color: "var(--brand-primary)",
-                        marginBottom: 8,
+                        marginBottom: 14,
                       }}
                     >
                       {hostShare?.auth_code ?? "---- ----"}
                     </div>
-                    <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 6 }}>
+                    <div
+                      style={{
+                        fontSize: 16,
+                        fontWeight: 600,
+                        color: "var(--text-primary)",
+                        fontVariantNumeric: "tabular-nums",
+                        marginBottom: 10,
+                      }}
+                    >
                       {EN.ep.expiresIn} {mins}:{secs}
                     </div>
                     {hostShare?.endpoint ? (
-                      <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                        {EN.ep.endpointLabel}: {hostShare.endpoint}
+                      <div
+                        style={{
+                          fontSize: 15,
+                          fontWeight: 600,
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        {EN.ep.endpointLabel}:{" "}
+                        <span
+                          style={{
+                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {hostShare.endpoint}
+                        </span>
                       </div>
                     ) : null}
                   </div>

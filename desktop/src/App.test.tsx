@@ -473,7 +473,8 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
     fireEvent.change(screen.getByLabelText("Host Address (Loopback)"), { target: { value: "127.0.0.1:45123" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
-    await screen.findByText("ERR_PAKE_BINDING_FAILED");
+    await screen.findByText("Invalid or expired Auth Code. Check the code and try again.");
+    expect(screen.queryByText(/ERR_PAKE_BINDING_FAILED/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "Connected" })).toBeNull();
   });
 });

@@ -677,4 +677,127 @@ mod tests {
         stop_host_sharing_impl(&state).unwrap();
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }
+
+    #[test]
+    fn tauri_ipc_slow_human_sas_beyond_5s_io_timeout_succeeds() {
+        let tmp_dir =
+            std::env::temp_dir().join(format!("jack-ep004-slow-sas-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let state = EasyPairingState::with_ep_home(tmp_dir.clone());
+        let h_status = start_host_sharing_impl(&state).unwrap();
+        let endpoint = h_status.endpoint.unwrap();
+        let code = h_status.auth_code.unwrap();
+
+        let c_sas =
+            start_client_pairing_impl(&state, endpoint, code, "slow-human-client".into()).unwrap();
+        assert_eq!(c_sas.stage, "VerifySas");
+        let client_sas = c_sas.sas_6digit.clone().unwrap();
+
+        // Simulate human reading SAS for 5.5 seconds (> 5s IO_TIMEOUT) before confirming
+        thread::sleep(Duration::from_millis(5500));
+
+        // Host must NOT have failed with ERR_IO (os error 11 / WouldBlock)
+        let host_mid = poll_host_status_impl(&state).unwrap();
+        assert!(
+            host_mid.error.is_none(),
+            "host failed during human SAS wait: {:?}",
+            host_mid.error
+        );
+
+        let _ = confirm_client_sas_impl(&state, true).unwrap();
+        let mut pending = None;
+        for _ in 0..80 {
+            let poll = poll_host_status_impl(&state).unwrap();
+            if poll.pending_request.is_some() {
+                pending = poll.pending_request;
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let req = pending.expect("host must see pending approval after >5s SAS wait");
+        assert_eq!(req.sas_6digit, client_sas);
+
+        let _ = decide_host_approval_impl(&state, req.request_id, true).unwrap();
+        let mut c_poll = poll_client_status_impl(&state).unwrap();
+        for _ in 0..80 {
+            if c_poll.stage == "Connected" {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+            c_poll = poll_client_status_impl(&state).unwrap();
+        }
+        assert_eq!(c_poll.stage, "Connected");
+        assert_eq!(c_poll.status_read.unwrap().status, "ok");
+
+        client_disconnect_impl(&state).unwrap();
+        stop_host_sharing_impl(&state).unwrap();
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn tauri_ipc_sas_mismatch_and_host_denial_paths() {
+        let tmp_dir =
+            std::env::temp_dir().join(format!("jack-ep004-mismatch-deny-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let state = EasyPairingState::with_ep_home(tmp_dir.clone());
+        let h_status = start_host_sharing_impl(&state).unwrap();
+        let endpoint = h_status.endpoint.unwrap();
+        let code = h_status.auth_code.unwrap();
+
+        // 1) Client rejects SAS ("Codes Don't Match") -> Client enters Error, never Connected
+        let c_sas =
+            start_client_pairing_impl(&state, endpoint.clone(), code.clone(), "client-1".into())
+                .unwrap();
+        assert_eq!(c_sas.stage, "VerifySas");
+        let _ = confirm_client_sas_impl(&state, false).unwrap();
+        let mut c_poll = poll_client_status_impl(&state).unwrap();
+        for _ in 0..40 {
+            if c_poll.stage == "Error" {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+            c_poll = poll_client_status_impl(&state).unwrap();
+        }
+        assert_eq!(c_poll.stage, "Error");
+        client_disconnect_impl(&state).unwrap();
+
+        // 2) Second attempt on same Host -> Client confirms SAS -> Host Denies -> Client Error
+        let c_sas2 = start_client_pairing_impl(&state, endpoint, code, "client-2".into()).unwrap();
+        assert_eq!(c_sas2.stage, "VerifySas");
+        let _ = confirm_client_sas_impl(&state, true).unwrap();
+
+        let mut pending = None;
+        for _ in 0..80 {
+            let poll = poll_host_status_impl(&state).unwrap();
+            if poll.pending_request.is_some() {
+                pending = poll.pending_request;
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let req = pending.expect("host must see pending approval on second attempt");
+        let _ = decide_host_approval_impl(&state, req.request_id, false).unwrap();
+
+        let mut c_poll2 = poll_client_status_impl(&state).unwrap();
+        for _ in 0..80 {
+            if c_poll2.stage == "Error" {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+            c_poll2 = poll_client_status_impl(&state).unwrap();
+        }
+        assert_eq!(c_poll2.stage, "Error");
+        assert!(c_poll2
+            .error
+            .unwrap_or_default()
+            .contains("ERR_APPROVAL_DENIED"));
+
+        client_disconnect_impl(&state).unwrap();
+        stop_host_sharing_impl(&state).unwrap();
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
 }

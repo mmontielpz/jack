@@ -14,6 +14,7 @@ use std::time::Duration;
 pub const ALPN_PAIR_V1: &[u8] = b"jack-pair/1";
 pub const MAX_FRAME_BYTES: usize = 16 * 1024;
 pub const IO_TIMEOUT: Duration = Duration::from_secs(5);
+pub const HUMAN_INTERACTION_TIMEOUT: Duration = Duration::from_secs(65);
 
 pub fn ensure_loopback(addr: SocketAddr) -> Result<(), JackError> {
     if !addr.ip().is_loopback() {
@@ -26,13 +27,17 @@ pub fn ensure_loopback(addr: SocketAddr) -> Result<(), JackError> {
 }
 
 pub fn configure_stream_timeouts(stream: &TcpStream) -> Result<(), JackError> {
-    stream
-        .set_read_timeout(Some(IO_TIMEOUT))
-        .map_err(|e| JackError::Io(e.to_string()))?;
+    set_stream_read_timeout(stream, IO_TIMEOUT)?;
     stream
         .set_write_timeout(Some(IO_TIMEOUT))
         .map_err(|e| JackError::Io(e.to_string()))?;
     Ok(())
+}
+
+pub fn set_stream_read_timeout(stream: &TcpStream, timeout: Duration) -> Result<(), JackError> {
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| JackError::Io(e.to_string()))
 }
 
 pub fn export_tls_channel_binding<S>(
@@ -57,10 +62,21 @@ pub fn write_bounded_frame<W: Write>(w: &mut W, payload: &[u8]) -> Result<(), Ja
     Ok(())
 }
 
+fn map_read_io_error(err: std::io::Error) -> JackError {
+    match err.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            JackError::Io("read timed out waiting for peer".into())
+        }
+        std::io::ErrorKind::UnexpectedEof => {
+            JackError::Io("peer disconnected before completing pairing".into())
+        }
+        _ => JackError::Io(err.to_string()),
+    }
+}
+
 pub fn read_bounded_frame<R: Read>(r: &mut R) -> Result<Vec<u8>, JackError> {
     let mut len_buf = [0u8; 4];
-    r.read_exact(&mut len_buf)
-        .map_err(|e| JackError::Io(e.to_string()))?;
+    r.read_exact(&mut len_buf).map_err(map_read_io_error)?;
     let len = u32::from_be_bytes(len_buf) as usize;
     if len > MAX_FRAME_BYTES {
         return Err(JackError::InvalidInput(
@@ -68,8 +84,7 @@ pub fn read_bounded_frame<R: Read>(r: &mut R) -> Result<Vec<u8>, JackError> {
         ));
     }
     let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf)
-        .map_err(|e| JackError::Io(e.to_string()))?;
+    r.read_exact(&mut buf).map_err(map_read_io_error)?;
     Ok(buf)
 }
 
