@@ -27,6 +27,16 @@ config_error() {
   return 1
 }
 
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "${s}"
+}
+
 valid_user() {
   local LC_ALL=C
   [[ ${#1} -le 64 && "$1" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]
@@ -1444,43 +1454,70 @@ registry_summary() {
   fi
 }
 
-doctor_platform_supported() {
-  local os release line
-  os="$(uname -s 2>/dev/null)" || os=Unknown
-  case "${os}" in
-    Darwin) return 0 ;;
+detect_platform() {
+  local release line proc_ver
+  _PLAT_OS="$(uname -s 2>/dev/null)" || _PLAT_OS=Unknown
+  _PLAT_DISTRO=unknown
+  _PLAT_RUNTIME=native
+  _PLAT_SUPPORTED=0
+  _PLAT_LABEL=unsupported
+  case "${_PLAT_OS}" in
+    Darwin)
+      _PLAT_DISTRO=macos
+      _PLAT_SUPPORTED=1
+      _PLAT_LABEL='macOS'
+      ;;
     Linux)
       release="$(cat /etc/os-release 2>/dev/null)" || release=''
       while IFS= read -r line; do
-        case "${line}" in ID=arch|ID=cachyos|'ID="arch"'|'ID="cachyos"') return 0 ;; esac
+        case "${line}" in
+          ID=arch|ID=cachyos|'ID="arch"'|'ID="cachyos"')
+            _PLAT_DISTRO=arch
+            _PLAT_SUPPORTED=1
+            _PLAT_LABEL='Arch Linux/CachyOS'
+            ;;
+          ID=ubuntu|'ID="ubuntu"')
+            _PLAT_DISTRO=ubuntu
+            _PLAT_SUPPORTED=1
+            _PLAT_LABEL='Ubuntu Linux'
+            ;;
+        esac
       done <<< "${release}"
-      return 1
+      proc_ver="$(cat "${JACK_PROC_VERSION:-/proc/version}" 2>/dev/null || true)"
+      if [[ -n "${WSL_INTEROP:-}" || "${proc_ver}" == *[Mm]icrosoft*WSL2* || "${proc_ver}" == *WSL2* ]]; then
+        _PLAT_RUNTIME=wsl2
+        if [[ "${_PLAT_SUPPORTED}" -eq 1 ]]; then
+          _PLAT_LABEL="${_PLAT_LABEL} (WSL2)"
+        fi
+      fi
       ;;
-    *) return 1 ;;
+    *)
+      _PLAT_RUNTIME=unknown
+      ;;
   esac
 }
 
+doctor_platform_supported() {
+  local _PLAT_OS _PLAT_DISTRO _PLAT_RUNTIME _PLAT_SUPPORTED _PLAT_LABEL
+  detect_platform
+  [[ "${_PLAT_SUPPORTED}" -eq 1 ]]
+}
+
 cmd_doctor() {
-  local doctor_fail=0 doctor_warn=0 os release line supported=0 parser_ok=0 state
+  local doctor_fail=0 doctor_warn=0 parser_ok=0 state
+  local _PLAT_OS _PLAT_DISTRO _PLAT_RUNTIME _PLAT_SUPPORTED _PLAT_LABEL
   local _CFG_EXISTS _CFG_VALID _CFG_COMPLETE _CFG_INCOMPLETE _CFG_TS_REQUIRED _CFG_DEFAULT_INVALID _CFG_PRIMARY_HOST _CFG_PRIMARY_SRC
   registry_summary
+  detect_platform
   doctor_line PASS "JACK CLI: running (${JACK_VERSION}; source checkout identity)."
   doctor_installation
-  os="$(uname -s 2>/dev/null)" || os=Unknown
-  case "${os}" in
-    Darwin) doctor_line PASS 'Platform: macOS.' ;;
-    Linux)
-      release="$(cat /etc/os-release 2>/dev/null)" || release=''
-      while IFS= read -r line; do
-        case "${line}" in ID=arch|ID=cachyos|'ID="arch"'|'ID="cachyos"') supported=1 ;; esac
-      done <<< "${release}"
-      if [[ "${supported}" -eq 1 ]]; then
-        doctor_line PASS 'Platform: Arch Linux/CachyOS.'
-      else
-        doctor_line FAIL 'Platform: Linux distribution unverified/unsupported; supported installer targets Arch/CachyOS. See README.'
-      fi ;;
-    *) doctor_line FAIL 'Platform: unsupported or undetectable; use macOS or Arch/CachyOS.' ;;
-  esac
+  if [[ "${_PLAT_SUPPORTED}" -eq 1 ]]; then
+    doctor_line PASS "Platform: ${_PLAT_LABEL}."
+  elif [[ "${_PLAT_OS}" == Linux ]]; then
+    doctor_line FAIL 'Platform: Linux distribution unverified/unsupported; supported targets are Arch/CachyOS and Ubuntu (including WSL2). See README.'
+  else
+    doctor_line FAIL 'Platform: unsupported or undetectable; use macOS, Arch/CachyOS, or Ubuntu (including WSL2).'
+  fi
   if command -v python3 >/dev/null 2>&1 && python3 -I -B -c 'import json, ipaddress' >/dev/null 2>&1; then
     parser_ok=1
     doctor_line PASS 'Discovery: optional Python 3 parser available.'
@@ -1600,12 +1637,13 @@ cmd_status_json() {
 }
 
 cmd_doctor_json() {
-  local os_type plat_ok=false ts_cli=false ts_daemon=false ssh_cli=false cfg_ok=false
+  local plat_ok=false ts_cli=false ts_daemon=false ssh_cli=false cfg_ok=false
   local ts_req=false def_ok=true
+  local _PLAT_OS _PLAT_DISTRO _PLAT_RUNTIME _PLAT_SUPPORTED _PLAT_LABEL
   local _CFG_EXISTS _CFG_VALID _CFG_COMPLETE _CFG_INCOMPLETE _CFG_TS_REQUIRED _CFG_DEFAULT_INVALID _CFG_PRIMARY_HOST _CFG_PRIMARY_SRC
   registry_summary
-  os_type="$(uname -s 2>/dev/null || echo Unknown)"
-  doctor_platform_supported && plat_ok=true || true
+  detect_platform
+  [[ "${_PLAT_SUPPORTED}" -eq 1 ]] && plat_ok=true || true
   check_tailscale_installed && ts_cli=true || true
   check_tailscale_connected && ts_daemon=true || true
   check_ssh && ssh_cli=true || true
@@ -1622,8 +1660,8 @@ cmd_doctor_json() {
     overall="WARN"
   fi
 
-  printf '{"subsystem":"jack","tool":"doctor","version":"%s","overall_status":"%s","checks":{"platform":{"os":"%s","supported":%s},"tailscale":{"cli_available":%s,"daemon_connected":%s,"required":%s},"ssh":{"client_available":%s},"configuration":{"file_exists":%s,"valid":%s,"complete_devices":%d,"default_device_valid":%s}}}\n' \
-    "${JACK_VERSION}" "${overall}" "${os_type}" "${plat_ok}" "${ts_cli}" "${ts_daemon}" "${ts_req}" "${ssh_cli}" \
+  printf '{"subsystem":"jack","tool":"doctor","version":"%s","overall_status":"%s","checks":{"platform":{"os":"%s","runtime":"%s","supported":%s},"tailscale":{"cli_available":%s,"daemon_connected":%s,"required":%s},"ssh":{"client_available":%s},"configuration":{"file_exists":%s,"valid":%s,"complete_devices":%d,"default_device_valid":%s}}}\n' \
+    "${JACK_VERSION}" "${overall}" "${_PLAT_OS}" "${_PLAT_RUNTIME}" "${plat_ok}" "${ts_cli}" "${ts_daemon}" "${ts_req}" "${ssh_cli}" \
     "$([[ "${_CFG_EXISTS}" -eq 1 ]] && echo 'true' || echo 'false')" "${cfg_ok}" "${_CFG_COMPLETE}" "${def_ok}"
   [[ "${overall}" != "FAIL" ]] || return 1
   return 0
@@ -1739,7 +1777,7 @@ cmd_repair() {
       ;;
     *)
       if [[ "${as_json}" -eq 1 ]]; then
-        printf '{"subsystem":"jack","tool":"repair","status":"ERROR","error":"Unknown repair action: %s"}\n' "${action}"
+        printf '{"subsystem":"jack","tool":"repair","status":"ERROR","error":"Unknown repair action: %s"}\n' "$(json_escape "${action}")"
       else
         echo "jack repair: unknown action: ${action}" >&2
       fi
@@ -1750,7 +1788,7 @@ cmd_repair() {
   # Independent Post-Repair Verification
   if [[ "${as_json}" -eq 1 ]]; then
     printf '{"subsystem":"jack","tool":"repair","action":"%s","status":"%s","post_repair_verification":{"status":"VERIFIED","read_only_restored":true}}\n' \
-      "${action}" "${repair_status}"
+      "$(json_escape "${action}")" "${repair_status}"
   else
     printf 'jack repair: %s [%s] - Post-repair verification: VERIFIED (read-only restored)\n' "${action}" "${repair_status}"
   fi

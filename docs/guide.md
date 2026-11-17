@@ -451,14 +451,17 @@ your own SSH agent.
 ## Uninstall
 
 ```bash
-./scripts/setup-macos.sh --uninstall        # on the Mac
-./scripts/setup-workstation.sh --uninstall  # on the workstation
+jack uninstall                              # recommended on installed Linux/WSL2
+./scripts/setup-workstation.sh --uninstall  # on Arch/CachyOS or Ubuntu/WSL2
+./scripts/setup-macos.sh --uninstall        # legacy macOS (deferred for v0.2.0)
 ```
 
-Requires exact `yes` to remove only the symlink pointing to this checkout.
-Unrelated commands/links are refused. Configuration, keys, packages, services,
-and profiles stay untouched. If an older installer added PATH lines, inspect
-and remove those lines manually; uninstall does not rewrite your profile.
+Requires exact `yes` to remove only the `~/.local/bin/jack` symlink pointing to
+this checkout. Unrelated commands/links are refused. Configuration
+(`$HOME/.config/jack/config`), `~/.ssh/known_hosts`, SSH keys, backups, packages,
+services, and shell profiles stay untouched. If an older installer added PATH
+lines, inspect and remove those lines manually; uninstall does not rewrite your
+profile.
 
 
 ## Security and contribution
