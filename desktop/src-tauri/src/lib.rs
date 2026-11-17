@@ -1553,6 +1553,7 @@ mod tests {
         assert!(res.peers[0].is_windows);
     }
 
+    #[cfg(unix)]
     #[test]
     fn isolated_cli_preflight_save_connect_and_reset_round_trip() {
         let dir = env::temp_dir().join(format!("jack-rust-test-046-{}", std::process::id()));
