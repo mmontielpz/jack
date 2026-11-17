@@ -2,15 +2,17 @@ mod easy_pairing_ipc;
 
 use easy_pairing_ipc::{
     client_disconnect_impl, client_read_status_impl, confirm_client_sas_impl,
-    decide_host_approval_impl, poll_client_status_impl, poll_host_status_impl,
-    revoke_host_peer_impl, start_client_pairing_impl, start_host_sharing_impl,
-    stop_host_sharing_impl, ClientPairingStatus, EasyPairingState, HostShareStatus,
+    decide_host_approval_impl, list_bind_options_impl, poll_client_status_impl,
+    poll_host_status_impl, revoke_host_peer_impl, start_client_pairing_impl,
+    start_host_sharing_impl, stop_host_sharing_impl, ClientPairingStatus, EasyPairingState,
+    HostShareStatus,
 };
 use jack_easy_pairing::status_cap::StatusReadResponse;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -139,6 +141,11 @@ fn resolve_effective_home() -> Result<PathBuf, String> {
         }
     }
     if let Ok(home) = env::var("HOME") {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home));
+        }
+    }
+    if let Ok(home) = env::var("USERPROFILE") {
         if !home.is_empty() {
             return Ok(PathBuf::from(home));
         }
@@ -1366,6 +1373,7 @@ fn reset_jack_config(confirmed: bool) -> Result<ResetResult, String> {
             .unwrap_or(0);
         let bak = cfg_dir.join(format!("config.bak.{}", ts));
         fs::copy(&cfg_file, &bak).map_err(|e| format!("Failed to create backup: {}", e))?;
+        #[cfg(unix)]
         let _ = fs::set_permissions(&bak, fs::Permissions::from_mode(0o600));
         backup_path = Some(bak.to_string_lossy().to_string());
 
@@ -1391,10 +1399,16 @@ fn reset_jack_config(confirmed: bool) -> Result<ResetResult, String> {
 }
 
 #[tauri::command]
+fn ep_host_list_bind_options() -> Vec<String> {
+    list_bind_options_impl()
+}
+
+#[tauri::command]
 fn ep_host_start_sharing(
     state: tauri::State<'_, EasyPairingState>,
+    bind_ip: Option<String>,
 ) -> Result<HostShareStatus, String> {
-    start_host_sharing_impl(&state)
+    start_host_sharing_impl(&state, bind_ip)
 }
 
 #[tauri::command]
@@ -1484,6 +1498,7 @@ pub fn run() {
             launch_connect,
             preview_reset_config,
             reset_jack_config,
+            ep_host_list_bind_options,
             ep_host_start_sharing,
             ep_host_poll_status,
             ep_host_decide_approval,

@@ -26,6 +26,66 @@ pub fn ensure_loopback(addr: SocketAddr) -> Result<(), JackError> {
     Ok(())
 }
 
+pub fn is_lan_or_loopback_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            if v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast() {
+                return false;
+            }
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || (o[0] == 100 && (o[1] & 0b1100_0000) == 64) // 100.64.0.0/10 CGNAT/Tailscale
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_unspecified() || v6.is_multicast() {
+                return false;
+            }
+            let seg0 = v6.segments()[0];
+            v6.is_loopback()
+                || (seg0 & 0xfe00) == 0xfc00 // fc00::/7 ULA
+                || (seg0 & 0xffc0) == 0xfe80 // fe80::/10 link-local
+        }
+    }
+}
+
+pub fn ensure_lan_or_loopback(addr: SocketAddr) -> Result<(), JackError> {
+    if addr.port() == 0 {
+        return Err(JackError::InvalidInput(
+            "port must be between 1 and 65535".into(),
+        ));
+    }
+    if !is_lan_or_loopback_ip(addr.ip()) {
+        return Err(JackError::LoopbackOnly(format!(
+            "refusing public or unspecified address {}",
+            addr.ip()
+        )));
+    }
+    Ok(())
+}
+
+pub fn detect_local_lan_ips() -> Vec<std::net::IpAddr> {
+    let mut found = Vec::new();
+    for probe in [
+        "192.168.255.254:80",
+        "10.255.255.254:80",
+        "172.16.255.254:80",
+    ] {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if sock.connect(probe).is_ok() {
+                if let Ok(local) = sock.local_addr() {
+                    let ip = local.ip();
+                    if !ip.is_loopback() && is_lan_or_loopback_ip(ip) && !found.contains(&ip) {
+                        found.push(ip);
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
 pub fn configure_stream_timeouts(stream: &TcpStream) -> Result<(), JackError> {
     set_stream_read_timeout(stream, IO_TIMEOUT)?;
     stream

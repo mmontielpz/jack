@@ -95,17 +95,12 @@ pub fn normalize_crockford_code(raw: &str) -> Result<Zeroizing<String>, JackErro
             continue;
         }
         let up = ch.to_ascii_uppercase();
-        let mapped = match up {
-            'O' => '0',
-            'I' | 'L' => '1',
-            c if CROCKFORD_ALPHABET.contains(&(c as u8)) => c,
-            _ => {
-                return Err(JackError::InvalidInput(
-                    "invalid character in pairing code".into(),
-                ))
-            }
-        };
-        norm.push(mapped);
+        if !CROCKFORD_ALPHABET.contains(&(up as u8)) {
+            return Err(JackError::InvalidInput(
+                "invalid character in pairing code".into(),
+            ));
+        }
+        norm.push(up);
     }
     if norm.len() != 8 {
         return Err(JackError::InvalidInput(

@@ -24,8 +24,9 @@ use crate::status_cap::{execute_capability, StatusReadResponse};
 use crate::transport::{
     build_tls13_pairing_client_config, build_tls13_pairing_server_config,
     build_tls13_pinned_client_config, build_tls13_pinned_server_config, configure_stream_timeouts,
-    ensure_loopback, export_tls_channel_binding, read_bounded_frame, set_stream_read_timeout,
-    write_bounded_frame, ALPN_PAIR_V1, HUMAN_INTERACTION_TIMEOUT, IO_TIMEOUT,
+    ensure_lan_or_loopback, export_tls_channel_binding, read_bounded_frame,
+    set_stream_read_timeout, write_bounded_frame, ALPN_PAIR_V1, HUMAN_INTERACTION_TIMEOUT,
+    IO_TIMEOUT,
 };
 use rustls::{ClientConnection, ServerConnection, StreamOwned};
 use rustls_pki_types::ServerName;
@@ -87,7 +88,7 @@ pub fn host_handle_pairing_connection(
     approval_gate: &Mutex<ApprovalGate>,
     decision_fn: impl FnOnce(&ApprovalRequest) -> Result<ApprovalDecision, JackError>,
 ) -> Result<(DeviceId, String), JackError> {
-    ensure_loopback(peer_addr)?;
+    ensure_lan_or_loopback(peer_addr)?;
     configure_stream_timeouts(&tcp)?;
 
     {
@@ -311,7 +312,7 @@ pub fn client_pair_with_code(
     expected_host_pk: Option<[u8; 32]>,
     sas_verify_fn: impl FnOnce(&str) -> bool,
 ) -> Result<(DeviceId, [u8; 32], String), JackError> {
-    ensure_loopback(addr)?;
+    ensure_lan_or_loopback(addr)?;
     let norm_code = normalize_crockford_code(raw_code)?;
     let tcp = TcpStream::connect_timeout(&addr, crate::transport::IO_TIMEOUT)
         .map_err(|e| JackError::HostUnreachable(e.to_string()))?;
@@ -423,7 +424,7 @@ pub fn host_serve_capability_once(
     lifecycle: &Mutex<HostLifecycle>,
     started_at: Instant,
 ) -> Result<(), JackError> {
-    ensure_loopback(peer_addr)?;
+    ensure_lan_or_loopback(peer_addr)?;
     configure_stream_timeouts(&tcp)?;
     {
         let lc = lifecycle
@@ -482,7 +483,7 @@ pub fn client_invoke_capability(
     expected_host_pk: [u8; 32],
     scope: &str,
 ) -> Result<StatusReadResponse, JackError> {
-    ensure_loopback(addr)?;
+    ensure_lan_or_loopback(addr)?;
     let tcp = TcpStream::connect_timeout(&addr, crate::transport::IO_TIMEOUT)
         .map_err(|e| JackError::HostUnreachable(e.to_string()))?;
     configure_stream_timeouts(&tcp)?;

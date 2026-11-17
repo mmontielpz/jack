@@ -393,6 +393,7 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
       endpoint: "127.0.0.1:45123",
       auth_code: "7K9M-2P4Q",
       paired_peer_id: "jack:ed25519:demo",
+      paired_peer_name: "linux-client",
     });
     const revokeSpy = vi.spyOn(jackApi, "epHostRevokePeer").mockResolvedValue();
     vi.spyOn(jackApi, "epHostStopSharing").mockResolvedValue();
@@ -407,7 +408,9 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
     expect(screen.getByText("Status check only (status.read)")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    await screen.findByRole("heading", { name: "Connected" });
+    await screen.findByRole("heading", { name: "Peer Authorized" });
+    expect(screen.getByText("linux-client")).toBeInTheDocument();
+    expect(screen.queryByText(/jack:ed25519:demo/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Revoke Access" }));
     await screen.findByRole("button", { name: "Add Device" });
@@ -441,12 +444,12 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
     const connectBtn = screen.getByRole("button", { name: "Connect" });
     expect(connectBtn).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText("Temporary Auth Code"), { target: { value: "7k9m2p4q" } });
-    fireEvent.change(screen.getByLabelText("Host Address (Loopback)"), { target: { value: "127.0.0.1:45123" } });
+    fireEvent.change(screen.getByLabelText("Temporary Auth Code"), { target: { value: " 7k9m 2p4q " } });
+    fireEvent.change(screen.getByLabelText("Host Address (LAN or Loopback)"), { target: { value: "127.0.0.1:45123" } });
     expect(connectBtn).not.toBeDisabled();
 
     fireEvent.click(connectBtn);
-    await screen.findByRole("heading", { name: "Verify Pairing Code" });
+    await screen.findByRole("heading", { name: "Step 1: Confirm 6-Digit Code" });
     expect(startSpy).toHaveBeenCalledWith("127.0.0.1:45123", "7K9M-2P4Q", "jack-desktop-client");
     expect(screen.getByText("482 910")).toBeInTheDocument();
 
@@ -470,11 +473,40 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Add Device" }));
     fireEvent.change(screen.getByLabelText("Temporary Auth Code"), { target: { value: "ZZZZ-ZZZZ" } });
-    fireEvent.change(screen.getByLabelText("Host Address (Loopback)"), { target: { value: "127.0.0.1:45123" } });
+    fireEvent.change(screen.getByLabelText("Host Address (LAN or Loopback)"), { target: { value: "127.0.0.1:45123" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await screen.findByText("Invalid or expired Auth Code. Check the code and try again.");
     expect(screen.queryByText(/ERR_PAKE_BINDING_FAILED/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "Connected" })).toBeNull();
+  });
+
+  it("separates Auth Code and Endpoint errors, rejects O/I/L, and supports LAN bind selection", async () => {
+    setupBaseMocks();
+    vi.spyOn(jackApi, "epHostListBindOptions").mockResolvedValue(["127.0.0.1", "192.168.1.42"]);
+    const shareSpy = vi.spyOn(jackApi, "epHostStartSharing").mockResolvedValue({
+      active: true,
+      state: "WaitingForRequest",
+      endpoint: "192.168.1.42:45123",
+      auth_code: "7K9M-2P4Q",
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Device" }));
+    fireEvent.change(screen.getByLabelText("Temporary Auth Code"), { target: { value: "O1L2-3456" } });
+    fireEvent.change(screen.getByLabelText("Host Address (LAN or Loopback)"), { target: { value: "8.8.8.8:45123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await screen.findByText(/Invalid character 'O' in Auth Code/);
+    expect(screen.getByText(/Only loopback \(127\.0\.0\.1\) or private LAN addresses are allowed\./)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Share This Device" }));
+    const select = await screen.findByLabelText("Listen Network");
+    await waitFor(() => expect(select).not.toBeDisabled());
+    fireEvent.change(select, { target: { value: "192.168.1.42" } });
+    await waitFor(() => expect(shareSpy).toHaveBeenCalledWith("192.168.1.42"));
   });
 });

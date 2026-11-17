@@ -2,16 +2,18 @@ use jack_easy_pairing::approval::{ApprovalDecision, ApprovalGate};
 use jack_easy_pairing::auth::{now_unix, AuthStore, DurationPolicy};
 use jack_easy_pairing::error::JackError;
 use jack_easy_pairing::host_service::HostLifecycle;
-use jack_easy_pairing::identity::{DeviceId, DeviceIdentity, InMemoryTestKeystore, Keystore};
+use jack_easy_pairing::identity::{platform_keystore, DeviceId, DeviceIdentity};
 use jack_easy_pairing::pairing::{normalize_crockford_code, PairingInvitation};
 use jack_easy_pairing::status_cap::StatusReadResponse;
-use jack_easy_pairing::transport::ensure_loopback;
+use jack_easy_pairing::transport::{
+    detect_local_lan_ips, ensure_lan_or_loopback, is_lan_or_loopback_ip,
+};
 use jack_easy_pairing::{
     client_invoke_capability, client_pair_with_code, host_handle_pairing_connection,
     host_serve_capability_once,
 };
 use serde::{Deserialize, Serialize};
-use std::net::{SocketAddr, TcpListener};
+use std::net::{IpAddr, SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -37,6 +39,7 @@ pub struct HostShareStatus {
     pub expires_at: Option<u64>,
     pub pending_request: Option<PendingApprovalView>,
     pub paired_peer_id: Option<String>,
+    pub paired_peer_name: Option<String>,
     pub error: Option<String>,
 }
 
@@ -59,6 +62,7 @@ struct HostRuntime {
     pending_view: Arc<Mutex<Option<PendingApprovalView>>>,
     decision_tx: Mutex<Option<mpsc::Sender<Result<ApprovalDecision, JackError>>>>,
     paired_peer_id: Arc<Mutex<Option<String>>>,
+    paired_peer_name: Arc<Mutex<Option<String>>>,
     last_error: Arc<Mutex<Option<String>>>,
     host_id: Arc<DeviceIdentity>,
     started_at: Instant,
@@ -112,14 +116,48 @@ fn resolve_ep_home() -> Result<PathBuf, String> {
         }
     } else if let Ok(h) = std::env::var("HOME") {
         PathBuf::from(h).join(".config/jack")
+    } else if let Ok(up) = std::env::var("LOCALAPPDATA") {
+        PathBuf::from(up).join("jack")
+    } else if let Ok(up) = std::env::var("USERPROFILE") {
+        PathBuf::from(up).join(".config/jack")
     } else {
-        return Err("Unable to resolve HOME or JACK_HOME".into());
+        return Err("Unable to resolve HOME, USERPROFILE, or JACK_HOME".into());
     };
     Ok(base.join("easy-pairing"))
 }
 
-pub fn start_host_sharing_impl(state: &EasyPairingState) -> Result<HostShareStatus, String> {
+pub fn list_bind_options_impl() -> Vec<String> {
+    let mut out = vec!["127.0.0.1".to_string()];
+    for ip in detect_local_lan_ips() {
+        let s = ip.to_string();
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+pub fn start_host_sharing_impl(
+    state: &EasyPairingState,
+    bind_ip: Option<String>,
+) -> Result<HostShareStatus, String> {
     stop_host_sharing_impl(state)?;
+
+    let selected_ip: IpAddr = match bind_ip.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => {
+            let ip: IpAddr = raw
+                .parse()
+                .map_err(|_| "ERR_INVALID_INPUT: invalid bind IP address".to_string())?;
+            if !is_lan_or_loopback_ip(ip) {
+                return Err(format!(
+                    "ERR_LOOPBACK_ONLY: refusing public or wildcard bind address {}",
+                    ip
+                ));
+            }
+            ip
+        }
+        None => IpAddr::from([127, 0, 0, 1]),
+    };
 
     let ep_home = match &state.ep_home_override {
         Some(path) => path.clone(),
@@ -127,7 +165,7 @@ pub fn start_host_sharing_impl(state: &EasyPairingState) -> Result<HostShareStat
     };
     let auth =
         Arc::new(AuthStore::open_isolated(&ep_home.join("host")).map_err(|e| e.to_string())?);
-    let ks = InMemoryTestKeystore::default();
+    let ks = platform_keystore(&ep_home.join("keystore"));
     let host_id = Arc::new(ks.load_or_create("host").map_err(|e| e.to_string())?);
 
     let mut lc = HostLifecycle::new();
@@ -135,7 +173,7 @@ pub fn start_host_sharing_impl(state: &EasyPairingState) -> Result<HostShareStat
     let lifecycle = Arc::new(Mutex::new(lc));
     let approval_gate = Arc::new(Mutex::new(ApprovalGate::default()));
 
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let listener = TcpListener::bind(SocketAddr::new(selected_ip, 0)).map_err(|e| e.to_string())?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     let endpoint = addr.to_string();
@@ -148,6 +186,7 @@ pub fn start_host_sharing_impl(state: &EasyPairingState) -> Result<HostShareStat
     let (dec_tx, dec_rx) = mpsc::channel::<Result<ApprovalDecision, JackError>>();
     let pending_view: Arc<Mutex<Option<PendingApprovalView>>> = Arc::new(Mutex::new(None));
     let paired_peer_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let paired_peer_name: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let last_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let started_at = Instant::now();
 
@@ -256,6 +295,7 @@ pub fn start_host_sharing_impl(state: &EasyPairingState) -> Result<HostShareStat
         expires_at: Some(expires_at),
         pending_request: None,
         paired_peer_id: None,
+        paired_peer_name: None,
         error: None,
     };
 
@@ -270,6 +310,7 @@ pub fn start_host_sharing_impl(state: &EasyPairingState) -> Result<HostShareStat
         pending_view,
         decision_tx: Mutex::new(Some(dec_tx)),
         paired_peer_id,
+        paired_peer_name,
         last_error,
         host_id,
         started_at,
@@ -288,6 +329,7 @@ pub fn poll_host_status_impl(state: &EasyPairingState) -> Result<HostShareStatus
             expires_at: None,
             pending_request: None,
             paired_peer_id: None,
+            paired_peer_name: None,
             error: None,
         });
     };
@@ -298,6 +340,7 @@ pub fn poll_host_status_impl(state: &EasyPairingState) -> Result<HostShareStatus
         .unwrap_or_else(|_| "Unknown".into());
     let pending = rt.pending_view.lock().ok().and_then(|g| g.clone());
     let paired = rt.paired_peer_id.lock().ok().and_then(|g| g.clone());
+    let paired_name = rt.paired_peer_name.lock().ok().and_then(|g| g.clone());
     let mut err = rt.last_error.lock().ok().and_then(|g| g.clone());
     if now_unix() > rt.expires_at && paired.is_none() && err.is_none() {
         err = Some("ERR_INVITE_EXPIRED".into());
@@ -310,6 +353,7 @@ pub fn poll_host_status_impl(state: &EasyPairingState) -> Result<HostShareStatus
         expires_at: Some(rt.expires_at),
         pending_request: pending,
         paired_peer_id: paired,
+        paired_peer_name: paired_name,
         error: err,
     })
 }
@@ -364,6 +408,11 @@ pub fn decide_host_approval_impl(
                 granted_duration: DurationPolicy::SessionOnly,
             }
         };
+        if approved {
+            if let Ok(mut pn) = rt.paired_peer_name.lock() {
+                *pn = Some(pending.peer_name.clone());
+            }
+        }
         let _ = tx.send(Ok(decision));
     }
     thread::sleep(Duration::from_millis(30));
@@ -406,10 +455,14 @@ pub fn start_client_pairing_impl(
         .trim()
         .parse()
         .map_err(|_| "ERR_INVALID_INPUT: invalid host address".to_string())?;
-    ensure_loopback(addr).map_err(|e| e.to_string())?;
+    ensure_lan_or_loopback(addr).map_err(|e| e.to_string())?;
     let _ = normalize_crockford_code(&auth_code_raw).map_err(|e| e.to_string())?;
 
-    let ks = InMemoryTestKeystore::default();
+    let ep_home = match &state.ep_home_override {
+        Some(path) => path.clone(),
+        None => resolve_ep_home()?,
+    };
+    let ks = platform_keystore(&ep_home.join("keystore"));
     let client_id = Arc::new(ks.load_or_create("client").map_err(|e| e.to_string())?);
 
     let (sas_tx, sas_rx) = mpsc::channel::<bool>();
@@ -593,17 +646,19 @@ mod tests {
 
         let state = EasyPairingState::with_ep_home(tmp_dir.clone());
 
-        // Non-loopback rejected immediately
+        // Public / wildcard addresses rejected immediately; private LAN allowed
         assert!(start_client_pairing_impl(
             &state,
-            "192.0.2.1:9999".into(),
+            "8.8.8.8:9999".into(),
             "ABCD-EFGH".into(),
             "client".into()
         )
         .is_err());
+        assert!(start_host_sharing_impl(&state, Some("0.0.0.0".into())).is_err());
+        assert!(start_host_sharing_impl(&state, Some("8.8.8.8".into())).is_err());
 
         // Host starts sharing
-        let h_status = start_host_sharing_impl(&state).unwrap();
+        let h_status = start_host_sharing_impl(&state, None).unwrap();
         assert!(h_status.active);
         let endpoint = h_status.endpoint.unwrap();
         let code = h_status.auth_code.unwrap();
@@ -686,7 +741,7 @@ mod tests {
         std::fs::create_dir_all(&tmp_dir).unwrap();
 
         let state = EasyPairingState::with_ep_home(tmp_dir.clone());
-        let h_status = start_host_sharing_impl(&state).unwrap();
+        let h_status = start_host_sharing_impl(&state, None).unwrap();
         let endpoint = h_status.endpoint.unwrap();
         let code = h_status.auth_code.unwrap();
 
@@ -744,7 +799,7 @@ mod tests {
         std::fs::create_dir_all(&tmp_dir).unwrap();
 
         let state = EasyPairingState::with_ep_home(tmp_dir.clone());
-        let h_status = start_host_sharing_impl(&state).unwrap();
+        let h_status = start_host_sharing_impl(&state, None).unwrap();
         let endpoint = h_status.endpoint.unwrap();
         let code = h_status.auth_code.unwrap();
 

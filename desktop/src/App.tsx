@@ -18,12 +18,13 @@ import {
   TailscaleState,
   WizardSaveRequest,
   isValidAlias,
-  isValidAuthCode,
   isValidHost,
   isValidUser,
   jackApi,
   normalizeAuthCode,
   sanitizeAlias,
+  validateAuthCode,
+  validateEndpoint,
 } from "./api/jack";
 import {
   BadgeKind,
@@ -167,8 +168,12 @@ export function App() {
   // Easy Pairing (EP-004 Auth Code-first) state
   const [epScreen, setEpScreen] = useState<EpScreen>("HOME");
   const [hostShare, setHostShare] = useState<HostShareStatus | null>(null);
+  const [epBindOptions, setEpBindOptions] = useState<string[]>(["127.0.0.1"]);
+  const [epSelectedBindIp, setEpSelectedBindIp] = useState<string>("127.0.0.1");
   const [epCodeInput, setEpCodeInput] = useState("");
   const [epEndpointInput, setEpEndpointInput] = useState("127.0.0.1:");
+  const [epCodeError, setEpCodeError] = useState<string | null>(null);
+  const [epEndpointError, setEpEndpointError] = useState<string | null>(null);
   const [epClientStatus, setEpClientStatus] = useState<ClientPairingStatus | null>(null);
   const [epLiveStatus, setEpLiveStatus] = useState<EpStatusReadResponse | null>(null);
   const [epBusy, setEpBusy] = useState(false);
@@ -713,11 +718,14 @@ export function App() {
     return () => window.clearInterval(id);
   }, [appState, epScreen, epClientStatus?.stage]);
 
-  const handleEpStartShare = async () => {
+  const handleEpStartShare = async (bindIpOverride?: string) => {
     setEpBusy(true);
     setErrorMsg(null);
+    const chosenIp = bindIpOverride ?? epSelectedBindIp;
     try {
-      const st = await jackApi.epHostStartSharing();
+      const opts = await jackApi.epHostListBindOptions().catch(() => ["127.0.0.1"]);
+      setEpBindOptions(opts);
+      const st = await jackApi.epHostStartSharing(chosenIp);
       setHostShare(st);
       setEpScreen("SHARE");
     } catch (err) {
@@ -764,6 +772,13 @@ export function App() {
   };
 
   const handleEpClientConnect = async () => {
+    const codeErr = validateAuthCode(epCodeInput);
+    const epErr = validateEndpoint(epEndpointInput);
+    setEpCodeError(codeErr);
+    setEpEndpointError(epErr);
+    if (codeErr || epErr) {
+      return;
+    }
     setEpBusy(true);
     setErrorMsg(null);
     try {
@@ -867,6 +882,8 @@ export function App() {
                 setErrorMsg(null);
                 setActionMsg(null);
                 setEpCodeInput("");
+                setEpCodeError(null);
+                setEpEndpointError(null);
                 setEpScreen("ENTER_CODE");
               }}
             >
@@ -975,15 +992,34 @@ export function App() {
                 </>
               ) : hostShare?.paired_peer_id ? (
                 <>
-                  <h2 className="pane-title">{EN.ep.connectedTitle}</h2>
-                  <p className="pane-subtitle">{EN.ep.connectedSubtitle}</p>
-                  <div className="banner-success">
-                    Peer authorized ({hostShare.paired_peer_id})
+                  <h2 className="pane-title">{EN.ep.peerAuthorizedTitle}</h2>
+                  <p className="pane-subtitle">{EN.ep.peerAuthorizedSubtitle}</p>
+                  <div
+                    className="card-box"
+                    style={{
+                      textAlign: "center",
+                      padding: 24,
+                      background: "#ecfdf5",
+                      border: "1px solid #86efac",
+                      color: "#166534",
+                    }}
+                  >
+                    <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>
+                      {EN.ep.peerAuthorizedTitle}
+                    </div>
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>
+                      {hostShare.paired_peer_name || "Paired Device"}
+                    </div>
                   </div>
                   <div className="footer-actions" style={{ marginTop: "auto" }}>
                     <button
                       type="button"
-                      className="btn btn-danger"
+                      className="btn"
+                      style={{
+                        background: "#dc2626",
+                        color: "#ffffff",
+                        border: "1px solid #b91c1c",
+                      }}
                       onClick={() => void handleEpRevokePeer(hostShare.paired_peer_id!)}
                       disabled={epBusy}
                     >
@@ -1050,6 +1086,34 @@ export function App() {
                     ) : null}
                   </div>
 
+                  {epBindOptions.length > 1 ? (
+                    <div className="field-group" style={{ marginTop: 12 }}>
+                      <label className="field-label" htmlFor="ep-bind-select">
+                        {EN.ep.bindSelectLabel}
+                      </label>
+                      <select
+                        id="ep-bind-select"
+                        className="text-input"
+                        value={epSelectedBindIp}
+                        disabled={epBusy}
+                        onChange={(e) => {
+                          const nextIp = e.target.value;
+                          setEpSelectedBindIp(nextIp);
+                          void handleEpStartShare(nextIp);
+                        }}
+                      >
+                        {epBindOptions.map((ip) => (
+                          <option key={ip} value={ip}>
+                            {ip === "127.0.0.1" ? EN.ep.bindLoopbackLabel : `Local Network (${ip})`}
+                          </option>
+                        ))}
+                      </select>
+                      <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "6px 0 0" }}>
+                        {EN.ep.bindLanHint}
+                      </p>
+                    </div>
+                  ) : null}
+
                   <div className="footer-actions" style={{ marginTop: "auto" }}>
                     <button
                       type="button"
@@ -1084,12 +1148,22 @@ export function App() {
                     id="ep-auth-code"
                     className="text-input"
                     value={epCodeInput}
-                    onChange={(e) => setEpCodeInput(normalizeAuthCode(e.target.value))}
+                    onChange={(e) => {
+                      const norm = normalizeAuthCode(e.target.value);
+                      setEpCodeInput(norm);
+                      if (epCodeError) setEpCodeError(validateAuthCode(norm));
+                    }}
                     placeholder={EN.ep.codePlaceholder}
                   />
-                  <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "6px 0 0" }}>
-                    {EN.ep.codeHint}
-                  </p>
+                  {epCodeError ? (
+                    <p style={{ fontSize: 12, color: "#dc2626", margin: "6px 0 0", fontWeight: 600 }}>
+                      {epCodeError}
+                    </p>
+                  ) : (
+                    <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "6px 0 0" }}>
+                      {EN.ep.codeHint}
+                    </p>
+                  )}
                 </div>
 
                 <div className="field-group">
@@ -1100,12 +1174,22 @@ export function App() {
                     id="ep-endpoint"
                     className="text-input"
                     value={epEndpointInput}
-                    onChange={(e) => setEpEndpointInput(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEpEndpointInput(val);
+                      if (epEndpointError) setEpEndpointError(validateEndpoint(val));
+                    }}
                     placeholder="127.0.0.1:45123"
                   />
-                  <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "6px 0 0" }}>
-                    {EN.ep.hostAddrHint}
-                  </p>
+                  {epEndpointError ? (
+                    <p style={{ fontSize: 12, color: "#dc2626", margin: "6px 0 0", fontWeight: 600 }}>
+                      {epEndpointError}
+                    </p>
+                  ) : (
+                    <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "6px 0 0" }}>
+                      {EN.ep.hostAddrHint}
+                    </p>
+                  )}
                 </div>
 
                 <div className="footer-actions" style={{ marginTop: "auto" }}>
@@ -1123,7 +1207,7 @@ export function App() {
                     type="button"
                     className="btn btn-primary"
                     onClick={() => void handleEpClientConnect()}
-                    disabled={epBusy || !isValidAuthCode(epCodeInput) || !epEndpointInput.trim()}
+                    disabled={epBusy || !epCodeInput.trim() || !epEndpointInput.trim()}
                   >
                     {EN.ep.connectCta}
                   </button>
@@ -1204,7 +1288,7 @@ export function App() {
                 <div className="card-box">
                   <div className="review-row">
                     <span>Host</span>
-                    <strong>{epClientStatus.host_id ?? "Paired Host"}</strong>
+                    <strong>Authorized Host</strong>
                   </div>
                   <div className="review-row">
                     <span>Status (status.read)</span>

@@ -156,6 +156,7 @@ export interface HostShareStatus {
   expires_at?: number | null;
   pending_request?: PendingApprovalView | null;
   paired_peer_id?: string | null;
+  paired_peer_name?: string | null;
   error?: string | null;
 }
 
@@ -423,8 +424,12 @@ export const jackApi = {
       message: "JACK configuration backed up and reset.",
     };
   },
-  async epHostStartSharing(): Promise<HostShareStatus> {
-    if (isTauri()) return tauriInvoke<HostShareStatus>("ep_host_start_sharing");
+  async epHostListBindOptions(): Promise<string[]> {
+    if (isTauri()) return tauriInvoke<string[]>("ep_host_list_bind_options");
+    return ["127.0.0.1"];
+  },
+  async epHostStartSharing(bindIp?: string): Promise<HostShareStatus> {
+    if (isTauri()) return tauriInvoke<HostShareStatus>("ep_host_start_sharing", { bindIp: bindIp ?? null });
     throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
   },
   async epHostPollStatus(): Promise<HostShareStatus> {
@@ -470,24 +475,74 @@ export const jackApi = {
 const CROCKFORD_SET = new Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ".split(""));
 
 export function normalizeAuthCode(raw: string): string {
-  const cleaned = raw
-    .trim()
-    .toUpperCase()
-    .replace(/[-\s]/g, "")
-    .replace(/O/g, "0")
-    .replace(/[IL]/g, "1");
+  const cleaned = raw.trim().toUpperCase().replace(/[-\s]/g, "");
   if (cleaned.length <= 4) return cleaned;
   return `${cleaned.slice(0, 4)}-${cleaned.slice(4, 8)}`;
 }
 
+export function validateAuthCode(raw: string): string | null {
+  const cleaned = raw.trim().toUpperCase().replace(/[-\s]/g, "");
+  if (cleaned.length === 0) return "Enter the 8-character Temporary Auth Code.";
+  for (const ch of cleaned) {
+    if (!CROCKFORD_SET.has(ch)) {
+      return `Invalid character '${ch}' in Auth Code (letters I, L, O, U are not used).`;
+    }
+  }
+  if (cleaned.length !== 8) {
+    return "Enter all 8 characters of the Temporary Auth Code.";
+  }
+  return null;
+}
+
 export function isValidAuthCode(raw: string): boolean {
-  const cleaned = raw
-    .trim()
-    .toUpperCase()
-    .replace(/[-\s]/g, "")
-    .replace(/O/g, "0")
-    .replace(/[IL]/g, "1");
-  return cleaned.length === 8 && cleaned.split("").every((c) => CROCKFORD_SET.has(c));
+  return validateAuthCode(raw) === null;
+}
+
+export function isLanOrLoopbackIpv4(ip: string): boolean {
+  const parts = ip.split(".");
+  if (parts.length !== 4 || !parts.every((p) => /^(0|[1-9][0-9]{0,2})$/.test(p) && Number(p) <= 255)) {
+    return false;
+  }
+  const [a, b] = parts.map(Number);
+  if (a === 0 || a >= 224) return false; // 0.0.0.0/8, multicast, broadcast
+  if (a === 127) return true; // loopback
+  if (a === 10) return true; // 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 169 && b === 254) return true; // link-local
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT / Tailscale 100.64.0.0/10
+  return false;
+}
+
+export function validateEndpoint(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return "Enter the Host Address (IP:port).";
+  let host = "";
+  let portStr = "";
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]:");
+    if (end === -1) return "Enter a valid IPv6 endpoint like [::1]:45123.";
+    host = trimmed.slice(1, end);
+    portStr = trimmed.slice(end + 2);
+    const lower = host.toLowerCase();
+    const validV6 = lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
+    if (!validV6) return "Only loopback or local LAN IPv6 addresses are allowed.";
+  } else {
+    const colon = trimmed.lastIndexOf(":");
+    if (colon === -1) return "Include the port number (for example, 192.168.1.42:45123).";
+    host = trimmed.slice(0, colon);
+    portStr = trimmed.slice(colon + 1);
+    if (!/^[0-9.]+$/.test(host) || host.split(".").length !== 4) {
+      return "Enter a valid IPv4 address and port (for example, 127.0.0.1:45123).";
+    }
+    if (!isLanOrLoopbackIpv4(host)) {
+      return "Only loopback (127.0.0.1) or private LAN addresses are allowed.";
+    }
+  }
+  if (!/^\d+$/.test(portStr)) return "Port must be a number between 1 and 65535.";
+  const port = Number(portStr);
+  if (port < 1 || port > 65535) return "Port must be between 1 and 65535.";
+  return null;
 }
 
 const RESERVED_ALIASES = new Set([
