@@ -33,7 +33,7 @@ jobs:
           - arch: x64
             target: x86_64-apple-darwin
             expected_lipo: x86_64
-    if: ${{ matrix.arch != 'x64' || (github.event_name == 'workflow_dispatch' && inputs.include_x64 == true) }}
+    if: ${{ matrix.arch != 'x64' || github.event.inputs.include_x64 == 'true' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
