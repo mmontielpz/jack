@@ -54,3 +54,16 @@ JACK combines two complementary layers:
 - **External Cryptographic Review**: Independent audit of the SPAKE2 + TLS 1.3 `RFC 9266` exporter binding and keystore implementations (`ADR-009`).
 - **Cross-Network Connectivity (`EP-006`)**: Optional end-to-end encrypted relay/coordination for separate-NAT devices without requiring Tailscale (`ADR-007`).
 - **Full 3-OS Physical Hardware Certification**: Bidirectional physical-hardware acceptance across Linux, macOS (`arm64`), and Windows 11, establishing the long-term 1.x compatibility contract.
+
+---
+
+## 5. Sequenced Execution Campaign (`012A` → `015`) & Technical Deep Dive
+
+For measured performance baselines, cryptographic architecture diagrams, cross-platform engineering solutions, and the reconciled `012A` backlog, see the **[JACK Engineering Case Study (`docs/ENGINEERING-CASE-STUDY.md`)](ENGINEERING-CASE-STUDY.md)**:
+
+1. **`012A` — E2E Performance, Reliability & Architecture Audit**: Completed baseline measurement and bottleneck identification.
+2. **`012B` — Open Source & Product Readiness**: Repository productization, README V2, community health files, and case study.
+3. **`013` — Product UI/UX Research & Design**: Navigation unification, pairing code/endpoint ergonomics, and revocation UX design.
+4. **`014` — Product Improvements & Automated Qualification**: Implementation of `PERF-001`..`003`, `REL-001`..`002`, `ARCH-001`, and approved `013` UX improvements.
+5. **`015` — Family Dogfood & Native Acceptance (Final Current-Cycle Phase)**: Full physical cross-OS native acceptance across Linux, macOS (`arm64`), and Windows 11. `015` produces acceptance evidence only; it does not itself authorize any public release or JACK V1. Release and V1 readiness are separate, owner-approved decisions made afterward.
+- **Post-`015` Future Horizon**: Agent connectivity remains future roadmap work *after* `015` family acceptance and is out of scope for `012B`–`015`.
