@@ -101,6 +101,10 @@ impl ApprovalGate {
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
     }
+
+    pub fn pending_invite_id(&self) -> Option<[u8; 16]> {
+        self.pending.as_ref().map(|p| p.invite_id)
+    }
 }
 
 pub fn make_approval_decision(

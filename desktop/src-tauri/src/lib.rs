@@ -1,3 +1,12 @@
+mod easy_pairing_ipc;
+
+use easy_pairing_ipc::{
+    client_disconnect_impl, client_read_status_impl, confirm_client_sas_impl,
+    decide_host_approval_impl, poll_client_status_impl, poll_host_status_impl,
+    revoke_host_peer_impl, start_client_pairing_impl, start_host_sharing_impl,
+    stop_host_sharing_impl, ClientPairingStatus, EasyPairingState, HostShareStatus,
+};
+use jack_easy_pairing::status_cap::StatusReadResponse;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
@@ -8,8 +17,22 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RESERVED_ALIASES: &[&str] = &[
-    "workstation", "mac", "add", "connect", "devices", "default", "status", "doctor",
-    "diagnose", "repair", "setup", "update", "install", "uninstall", "help", "device",
+    "workstation",
+    "mac",
+    "add",
+    "connect",
+    "devices",
+    "default",
+    "status",
+    "doctor",
+    "diagnose",
+    "repair",
+    "setup",
+    "update",
+    "install",
+    "uninstall",
+    "help",
+    "device",
 ];
 
 pub fn validate_device_alias(alias: &str) -> Result<(), String> {
@@ -72,7 +95,9 @@ pub fn validate_host(host: &str) -> Result<(), String> {
             if part.is_empty() || (part.len() > 1 && part.starts_with('0')) {
                 return Err("Invalid IPv4 octet.".into());
             }
-            let val: u16 = part.parse().map_err(|_| "Invalid IPv4 octet.".to_string())?;
+            let val: u16 = part
+                .parse()
+                .map_err(|_| "Invalid IPv4 octet.".to_string())?;
             if val > 255 {
                 return Err("IPv4 octet out of range.".into());
             }
@@ -321,9 +346,15 @@ fn detect_install_url_and_family() -> (String, String) {
     if cfg!(target_os = "macos") {
         ("macos".into(), "https://tailscale.com/download/mac".into())
     } else if cfg!(target_os = "windows") {
-        ("windows".into(), "https://tailscale.com/download/windows".into())
+        (
+            "windows".into(),
+            "https://tailscale.com/download/windows".into(),
+        )
     } else {
-        ("linux".into(), "https://tailscale.com/download/linux".into())
+        (
+            "linux".into(),
+            "https://tailscale.com/download/linux".into(),
+        )
     }
 }
 
@@ -352,43 +383,44 @@ pub fn parse_tailscale_state_json(raw: &str) -> TailscaleState {
         .unwrap_or("Unknown")
         .to_string();
 
-    let (service_running, signed_in, connected, status_category, message) = match backend_state.as_str() {
-        "Running" => (
-            true,
-            true,
-            true,
-            "CONNECTED",
-            "Tailscale is installed, signed in, and connected.".to_string(),
-        ),
-        "NeedsLogin" | "NeedsMachineAuth" => (
-            true,
-            false,
-            false,
-            "SIGNED_OUT",
-            "Tailscale is installed and running, but you are not signed in.".to_string(),
-        ),
-        "Stopped" => (
-            true,
-            true,
-            false,
-            "DISCONNECTED",
-            "Tailscale is installed but currently disconnected (Stopped).".to_string(),
-        ),
-        "NoState" | "Starting" => (
-            true,
-            false,
-            false,
-            "DISCONNECTED",
-            format!("Tailscale is not connected yet (state: {}).", backend_state),
-        ),
-        _ => (
-            false,
-            false,
-            false,
-            "UNKNOWN",
-            format!("Tailscale state is unknown ({}).", backend_state),
-        ),
-    };
+    let (service_running, signed_in, connected, status_category, message) =
+        match backend_state.as_str() {
+            "Running" => (
+                true,
+                true,
+                true,
+                "CONNECTED",
+                "Tailscale is installed, signed in, and connected.".to_string(),
+            ),
+            "NeedsLogin" | "NeedsMachineAuth" => (
+                true,
+                false,
+                false,
+                "SIGNED_OUT",
+                "Tailscale is installed and running, but you are not signed in.".to_string(),
+            ),
+            "Stopped" => (
+                true,
+                true,
+                false,
+                "DISCONNECTED",
+                "Tailscale is installed but currently disconnected (Stopped).".to_string(),
+            ),
+            "NoState" | "Starting" => (
+                true,
+                false,
+                false,
+                "DISCONNECTED",
+                format!("Tailscale is not connected yet (state: {}).", backend_state),
+            ),
+            _ => (
+                false,
+                false,
+                false,
+                "UNKNOWN",
+                format!("Tailscale state is unknown ({}).", backend_state),
+            ),
+        };
 
     let tailnet_name = v
         .pointer("/CurrentTailnet/Name")
@@ -417,8 +449,8 @@ pub fn parse_tailscale_state_json(raw: &str) -> TailscaleState {
 }
 
 pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String> {
-    let val: serde_json::Value =
-        serde_json::from_str(raw).map_err(|_| "Invalid response from tailscale status.".to_string())?;
+    let val: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|_| "Invalid response from tailscale status.".to_string())?;
     let state = val
         .get("BackendState")
         .and_then(|v| v.as_str())
@@ -446,7 +478,10 @@ pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String>
     let mut peers = Vec::new();
     if let Some(peer_map) = val.get("Peer").and_then(|p| p.as_object()) {
         for (key, peer) in peer_map {
-            let pid = peer.get("ID").and_then(|v| v.as_str()).unwrap_or(key.as_str());
+            let pid = peer
+                .get("ID")
+                .and_then(|v| v.as_str())
+                .unwrap_or(key.as_str());
             if !self_id.is_empty() && pid == self_id {
                 continue;
             }
@@ -486,7 +521,10 @@ pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String>
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown")
                 .to_string();
-            let online = peer.get("Online").and_then(|v| v.as_bool()).unwrap_or(false);
+            let online = peer
+                .get("Online")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let is_windows = os.to_ascii_lowercase().contains("windows");
             peers.push(TailscalePeer {
                 id: pid.to_string(),
@@ -506,7 +544,10 @@ pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String>
         message: if state == "Running" {
             "Tailscale peers discovered (discovery does not verify SSH authentication).".into()
         } else {
-            format!("Tailscale state is '{}'. You can enter an address manually.", state)
+            format!(
+                "Tailscale state is '{}'. You can enter an address manually.",
+                state
+            )
         },
     })
 }
@@ -526,7 +567,10 @@ fn get_platform_info() -> PlatformInfo {
     let is_wsl2 = if os == "linux" {
         env::var("WSL_INTEROP").is_ok()
             || fs::read_to_string("/proc/version")
-                .map(|v| v.to_ascii_lowercase().contains("wsl2") || v.to_ascii_lowercase().contains("microsoft"))
+                .map(|v| {
+                    v.to_ascii_lowercase().contains("wsl2")
+                        || v.to_ascii_lowercase().contains("microsoft")
+                })
                 .unwrap_or(false)
     } else {
         false
@@ -550,8 +594,8 @@ fn list_devices() -> Result<Vec<DeviceEntry>, String> {
     if code != 0 {
         return Err(if stderr.is_empty() { stdout } else { stderr });
     }
-    let parsed: DevicesResponse = serde_json::from_str(&stdout)
-        .map_err(|e| format!("Failed to parse device list: {}", e))?;
+    let parsed: DevicesResponse =
+        serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse device list: {}", e))?;
     Ok(parsed.devices)
 }
 
@@ -560,8 +604,7 @@ fn get_device_status(alias: String) -> Result<serde_json::Value, String> {
     validate_default_alias(&alias)?;
     let (_code, stdout, stderr) = run_jack(&["status", &alias, "--json"])?;
     if stdout.starts_with('{') {
-        serde_json::from_str(&stdout)
-            .map_err(|e| format!("Failed to parse device status: {}", e))
+        serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse device status: {}", e))
     } else {
         Err(if stderr.is_empty() {
             "Could not query device status.".into()
@@ -604,7 +647,9 @@ fn run_diagnose() -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn get_tailscale_state() -> TailscaleState {
     let (os_family, install_url) = detect_install_url_and_family();
-    let out = Command::new("tailscale").args(["status", "--json"]).output();
+    let out = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output();
     match out {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
@@ -631,8 +676,18 @@ fn get_tailscale_state() -> TailscaleState {
                 service_running: !stopped && false,
                 signed_in: false,
                 connected: false,
-                status_category: if stopped { "SERVICE_STOPPED" } else { "DISCONNECTED" }.into(),
-                backend_state: if stopped { "ServiceStopped" } else { "Disconnected" }.into(),
+                status_category: if stopped {
+                    "SERVICE_STOPPED"
+                } else {
+                    "DISCONNECTED"
+                }
+                .into(),
+                backend_state: if stopped {
+                    "ServiceStopped"
+                } else {
+                    "Disconnected"
+                }
+                .into(),
                 tailnet_name: None,
                 self_name: None,
                 os_family,
@@ -721,7 +776,9 @@ fn test_ssh_authentication_impl(
             status: "NOT_TESTED".into(),
             host_key_checked: false,
             failure_category: None,
-            recovery_hint: Some("Disable JACK_CONNECT_DRY_RUN to run a live authorized SSH test.".into()),
+            recovery_hint: Some(
+                "Disable JACK_CONNECT_DRY_RUN to run a live authorized SSH test.".into(),
+            ),
             detail: "Dry-run mode active: SSH authentication was not tested.".into(),
         });
     }
@@ -759,7 +816,10 @@ fn test_ssh_authentication_impl(
         let detail = if stderr.is_empty() {
             "SSH authentication failed or host key is not trusted in known_hosts.".into()
         } else {
-            let first_line = stderr.lines().next().unwrap_or("SSH authentication failed.");
+            let first_line = stderr
+                .lines()
+                .next()
+                .unwrap_or("SSH authentication failed.");
             format!("SSH authentication failed: {}", first_line)
         };
         Ok(SshAuthTestResult {
@@ -784,7 +844,9 @@ fn test_ssh_authentication(
 
 #[tauri::command]
 fn discover_tailscale_peers() -> DiscoveryResult {
-    let out = Command::new("tailscale").args(["status", "--json"]).output();
+    let out = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output();
     match out {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
@@ -804,7 +866,10 @@ fn discover_tailscale_peers() -> DiscoveryResult {
                 message: if stderr.is_empty() {
                     "Tailscale is not connected. You can enter a host address manually.".into()
                 } else {
-                    format!("Tailscale unavailable ({}). Enter a host address manually.", stderr)
+                    format!(
+                        "Tailscale unavailable ({}). Enter a host address manually.",
+                        stderr
+                    )
                 },
             }
         }
@@ -812,7 +877,9 @@ fn discover_tailscale_peers() -> DiscoveryResult {
             available: false,
             backend_state: "NotInstalled".into(),
             peers: vec![],
-            message: "Tailscale CLI is not installed. You can configure a direct SSH host manually.".into(),
+            message:
+                "Tailscale CLI is not installed. You can configure a direct SSH host manually."
+                    .into(),
         },
     }
 }
@@ -867,7 +934,10 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
                         name: "SSH username".into(),
                         status: "FAIL".into(),
                         detail: e,
-                        remediation: Some("Use letters, numbers, '.', '-', or '_' starting with a letter or '_'.".into()),
+                        remediation: Some(
+                            "Use letters, numbers, '.', '-', or '_' starting with a letter or '_'."
+                                .into(),
+                        ),
                     });
                 }
             }
@@ -880,7 +950,9 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
                     name: "Alias conflict".into(),
                     status: "FAIL".into(),
                     detail: format!("Device alias '{}' already exists in configuration.", alias),
-                    remediation: Some("Choose a unique device alias or remove the existing entry first.".into()),
+                    remediation: Some(
+                        "Choose a unique device alias or remove the existing entry first.".into(),
+                    ),
                 });
             } else {
                 checks.push(PreflightCheckItem {
@@ -956,7 +1028,10 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
             name: "OpenSSH client".into(),
             status: "FAIL".into(),
             detail: "OpenSSH client (`ssh`) was not found in PATH.".into(),
-            remediation: Some("Install OpenSSH client (`pacman -S openssh` or `apt install openssh-client`).".into()),
+            remediation: Some(
+                "Install OpenSSH client (`pacman -S openssh` or `apt install openssh-client`)."
+                    .into(),
+            ),
         });
     }
 
@@ -971,7 +1046,9 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
                 name: "Platform support".into(),
                 status: "WARNING".into(),
                 detail: "Current OS distribution is outside officially tested targets.".into(),
-                remediation: Some("Tested platforms: Arch/CachyOS, Ubuntu Linux, and Windows 11 WSL2.".into()),
+                remediation: Some(
+                    "Tested platforms: Arch/CachyOS, Ubuntu Linux, and Windows 11 WSL2.".into(),
+                ),
             });
         }
     }
@@ -986,7 +1063,9 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
                 name: "Configuration path safety".into(),
                 status: "FAIL".into(),
                 detail: "Configuration directory cannot be a symlink.".into(),
-                remediation: Some("Replace ~/.config/jack symlink with a regular user-owned directory.".into()),
+                remediation: Some(
+                    "Replace ~/.config/jack symlink with a regular user-owned directory.".into(),
+                ),
             });
         } else {
             #[cfg(unix)]
@@ -1018,7 +1097,10 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
                 checks.push(PreflightCheckItem {
                     name: "Configuration path safety".into(),
                     status: "PASS".into(),
-                    detail: format!("Target configuration directory ({}) is safe.", cfg_dir.display()),
+                    detail: format!(
+                        "Target configuration directory ({}) is safe.",
+                        cfg_dir.display()
+                    ),
                     remediation: None,
                 });
             }
@@ -1209,7 +1291,12 @@ fn launch_connect(alias: String) -> Result<ConnectResult, String> {
     ];
 
     for (term, prefix) in terminals {
-        if Command::new("which").arg(term).output().map(|o| o.status.success()).unwrap_or(false) {
+        if Command::new("which")
+            .arg(term)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             let mut cmd = Command::new(term);
             cmd.args(*prefix);
             cmd.arg(&jack_str);
@@ -1297,13 +1384,89 @@ fn reset_jack_config(confirmed: bool) -> Result<ResetResult, String> {
         reset: true,
         backup_path,
         affected_files: affected,
-        message: "JACK configuration reset cleanly. SSH keys, known_hosts, and Tailscale were preserved.".into(),
+        message:
+            "JACK configuration reset cleanly. SSH keys, known_hosts, and Tailscale were preserved."
+                .into(),
     })
+}
+
+#[tauri::command]
+fn ep_host_start_sharing(
+    state: tauri::State<'_, EasyPairingState>,
+) -> Result<HostShareStatus, String> {
+    start_host_sharing_impl(&state)
+}
+
+#[tauri::command]
+fn ep_host_poll_status(
+    state: tauri::State<'_, EasyPairingState>,
+) -> Result<HostShareStatus, String> {
+    poll_host_status_impl(&state)
+}
+
+#[tauri::command]
+fn ep_host_decide_approval(
+    state: tauri::State<'_, EasyPairingState>,
+    request_id: String,
+    approved: bool,
+) -> Result<HostShareStatus, String> {
+    decide_host_approval_impl(&state, request_id, approved)
+}
+
+#[tauri::command]
+fn ep_host_revoke_peer(
+    state: tauri::State<'_, EasyPairingState>,
+    peer_id: String,
+) -> Result<(), String> {
+    revoke_host_peer_impl(&state, peer_id)
+}
+
+#[tauri::command]
+fn ep_host_stop_sharing(state: tauri::State<'_, EasyPairingState>) -> Result<(), String> {
+    stop_host_sharing_impl(&state)
+}
+
+#[tauri::command]
+fn ep_client_start_pairing(
+    state: tauri::State<'_, EasyPairingState>,
+    endpoint: String,
+    auth_code: String,
+    client_name: String,
+) -> Result<ClientPairingStatus, String> {
+    start_client_pairing_impl(&state, endpoint, auth_code, client_name)
+}
+
+#[tauri::command]
+fn ep_client_confirm_sas(
+    state: tauri::State<'_, EasyPairingState>,
+    confirmed: bool,
+) -> Result<ClientPairingStatus, String> {
+    confirm_client_sas_impl(&state, confirmed)
+}
+
+#[tauri::command]
+fn ep_client_poll_status(
+    state: tauri::State<'_, EasyPairingState>,
+) -> Result<ClientPairingStatus, String> {
+    poll_client_status_impl(&state)
+}
+
+#[tauri::command]
+fn ep_client_read_status(
+    state: tauri::State<'_, EasyPairingState>,
+) -> Result<StatusReadResponse, String> {
+    client_read_status_impl(&state)
+}
+
+#[tauri::command]
+fn ep_client_disconnect(state: tauri::State<'_, EasyPairingState>) -> Result<(), String> {
+    client_disconnect_impl(&state)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(EasyPairingState::default())
         .invoke_handler(tauri::generate_handler![
             get_cli_version,
             get_platform_info,
@@ -1321,6 +1484,16 @@ pub fn run() {
             launch_connect,
             preview_reset_config,
             reset_jack_config,
+            ep_host_start_sharing,
+            ep_host_poll_status,
+            ep_host_decide_approval,
+            ep_host_revoke_peer,
+            ep_host_stop_sharing,
+            ep_client_start_pairing,
+            ep_client_confirm_sas,
+            ep_client_poll_status,
+            ep_client_read_status,
+            ep_client_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1423,7 +1596,10 @@ mod tests {
         assert!(reset.backup_path.is_some());
         assert!(Path::new(&reset.backup_path.unwrap()).exists());
         assert!(!dir.join(".config/jack/config").exists());
-        assert_eq!(fs::read_to_string(dir.join(".ssh/known_hosts")).unwrap(), "sentinel\n");
+        assert_eq!(
+            fs::read_to_string(dir.join(".ssh/known_hosts")).unwrap(),
+            "sentinel\n"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         env::remove_var("JACK_HOME");
@@ -1436,7 +1612,12 @@ mod tests {
             r#"{"BackendState":"Running","CurrentTailnet":{"Name":"tailnet.ts.net"},"Self":{"HostName":"cachy"}}"#,
         );
         assert_eq!(running.status_category, "CONNECTED");
-        assert!(running.cli_installed && running.service_running && running.signed_in && running.connected);
+        assert!(
+            running.cli_installed
+                && running.service_running
+                && running.signed_in
+                && running.connected
+        );
         assert_eq!(running.tailnet_name.as_deref(), Some("tailnet.ts.net"));
 
         let needs_login = parse_tailscale_state_json(r#"{"BackendState":"NeedsLogin"}"#);
@@ -1451,21 +1632,45 @@ mod tests {
         assert!(!unknown.connected);
 
         // Consent refusal & injection rejection
-        assert!(test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), false, false).is_err());
-        assert!(test_ssh_authentication_impl("-oProxyCommand=id".into(), "127.0.0.1".into(), true, false).is_err());
+        assert!(
+            test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), false, false).is_err()
+        );
+        assert!(test_ssh_authentication_impl(
+            "-oProxyCommand=id".into(),
+            "127.0.0.1".into(),
+            true,
+            false
+        )
+        .is_err());
         assert!(check_network_reachability_impl("-oProxyCommand=id".into(), false).is_err());
 
         // Dry-run honesty (thread-safe, no env mutation)
         let dry_net = check_network_reachability_impl("127.0.0.1".into(), true).unwrap();
         assert_eq!(dry_net.status, "NOT_TESTED");
-        let dry_ssh = test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), true, true).unwrap();
+        let dry_ssh =
+            test_ssh_authentication_impl("alice".into(), "127.0.0.1".into(), true, true).unwrap();
         assert_eq!(dry_ssh.status, "NOT_TESTED");
 
         // Failure classification
-        assert_eq!(classify_ssh_failure("Host key verification failed.").0, "host_key_issue");
-        assert_eq!(classify_ssh_failure("Permission denied (publickey).").0, "auth_rejected");
-        assert_eq!(classify_ssh_failure("ssh: connect to host x port 22: Connection timed out").0, "timeout");
-        assert_eq!(classify_ssh_failure("ssh: connect to host x port 22: Connection refused").0, "ssh_unavailable");
-        assert_eq!(classify_ssh_failure("Could not resolve hostname x").0, "offline");
+        assert_eq!(
+            classify_ssh_failure("Host key verification failed.").0,
+            "host_key_issue"
+        );
+        assert_eq!(
+            classify_ssh_failure("Permission denied (publickey).").0,
+            "auth_rejected"
+        );
+        assert_eq!(
+            classify_ssh_failure("ssh: connect to host x port 22: Connection timed out").0,
+            "timeout"
+        );
+        assert_eq!(
+            classify_ssh_failure("ssh: connect to host x port 22: Connection refused").0,
+            "ssh_unavailable"
+        );
+        assert_eq!(
+            classify_ssh_failure("Could not resolve hostname x").0,
+            "offline"
+        );
     }
 }

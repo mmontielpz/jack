@@ -84,8 +84,8 @@ describe("JACK Desktop 4-Stage Tailscale-Aware Onboarding", () => {
 
     render(<App />);
 
-    // Welcome -> Stage 1 Check Tailscale -> auto-advances to Stage 2 Choose Device
-    fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
+    // Easy Pairing Home -> Advanced: Manual SSH -> Stage 1 Check Tailscale -> auto-advances to Stage 2
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced: Manual SSH" }));
     await screen.findByText(/Tailscale is connected\. Continuing/i);
     await screen.findByRole("heading", { name: "Choose Device" }, { timeout: 2500 });
 
@@ -190,7 +190,7 @@ describe("JACK Desktop 4-Stage Tailscale-Aware Onboarding", () => {
     render(<App />);
 
     // 1. Not installed -> official link
-    fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced: Manual SSH" }));
     await screen.findByText("Tailscale is not installed");
     expect(screen.getByRole("link", { name: "Download Tailscale for your OS" })).toHaveAttribute(
       "href",
@@ -276,7 +276,7 @@ describe("JACK Desktop 4-Stage Tailscale-Aware Onboarding", () => {
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Start Setup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced: Manual SSH" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use Manual SSH Instead" }));
     fireEvent.change(screen.getByLabelText("IPv4 address or hostname"), { target: { value: "10.0.0.5" } });
     fireEvent.change(screen.getByLabelText("Device alias"), { target: { value: "manual-box" } });
@@ -340,5 +340,140 @@ describe("JACK Desktop 4-Stage Tailscale-Aware Onboarding", () => {
     await screen.findByRole("heading", { name: "Check Tailscale" });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await screen.findByText("My Devices");
+  });
+});
+
+describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/");
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders minimal Auth Code-first Home without SSH/Tailscale fields", async () => {
+    setupBaseMocks();
+    render(<App />);
+
+    await screen.findByRole("button", { name: "Add Device" });
+    expect(screen.getByRole("button", { name: "Share This Device" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Advanced: Manual SSH" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/SSH Username/i)).toBeNull();
+  });
+
+  it("runs Host Share -> Verify SAS -> Approve -> Revoke Access", async () => {
+    setupBaseMocks();
+    vi.spyOn(jackApi, "epHostStartSharing").mockResolvedValue({
+      active: true,
+      state: "WaitingForRequest",
+      endpoint: "127.0.0.1:45123",
+      auth_code: "7K9M-2P4Q",
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    });
+    vi.spyOn(jackApi, "epHostPollStatus").mockResolvedValue({
+      active: true,
+      state: "Authorizing",
+      endpoint: "127.0.0.1:45123",
+      auth_code: "7K9M-2P4Q",
+      expires_at: Math.floor(Date.now() / 1000) + 290,
+      pending_request: {
+        request_id: "apr-1",
+        peer_id: "jack:ed25519:demo",
+        peer_name: "linux-client",
+        requested_scope: "status.read",
+        sas_6digit: "482 910",
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+    vi.spyOn(jackApi, "epHostDecideApproval").mockResolvedValue({
+      active: true,
+      state: "Active",
+      endpoint: "127.0.0.1:45123",
+      auth_code: "7K9M-2P4Q",
+      paired_peer_id: "jack:ed25519:demo",
+    });
+    const revokeSpy = vi.spyOn(jackApi, "epHostRevokePeer").mockResolvedValue();
+    vi.spyOn(jackApi, "epHostStopSharing").mockResolvedValue();
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Share This Device" }));
+    await screen.findByText("7K9M-2P4Q");
+
+    await screen.findByRole("heading", { name: "Approve Pairing Request" });
+    expect(screen.getByText("482 910")).toBeInTheDocument();
+    expect(screen.getByText("Status check only (status.read)")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await screen.findByRole("heading", { name: "Connected" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Access" }));
+    await screen.findByRole("button", { name: "Add Device" });
+    expect(revokeSpy).toHaveBeenCalledWith("jack:ed25519:demo");
+  });
+
+  it("runs Client Add Device -> Normalize Code -> Verify SAS -> Connected -> Refresh -> Disconnect", async () => {
+    setupBaseMocks();
+    const startSpy = vi.spyOn(jackApi, "epClientStartPairing").mockResolvedValue({
+      stage: "VerifySas",
+      sas_6digit: "482 910",
+    });
+    vi.spyOn(jackApi, "epClientConfirmSas").mockResolvedValue({
+      stage: "Connected",
+      host_id: "jack:ed25519:host123",
+      status_read: { status: "ok", os: "linux", jack_version: "0.1.0", uptime_seconds: 5 },
+    });
+    vi.spyOn(jackApi, "epClientReadStatus").mockResolvedValue({
+      status: "ok",
+      os: "linux",
+      jack_version: "0.1.0",
+      uptime_seconds: 9,
+    });
+    vi.spyOn(jackApi, "epClientDisconnect").mockResolvedValue();
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Device" }));
+    await screen.findByRole("heading", { name: "Add Device" });
+
+    const connectBtn = screen.getByRole("button", { name: "Connect" });
+    expect(connectBtn).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Temporary Auth Code"), { target: { value: "7k9m2p4q" } });
+    fireEvent.change(screen.getByLabelText("Host Address (Loopback)"), { target: { value: "127.0.0.1:45123" } });
+    expect(connectBtn).not.toBeDisabled();
+
+    fireEvent.click(connectBtn);
+    await screen.findByRole("heading", { name: "Verify Pairing Code" });
+    expect(startSpy).toHaveBeenCalledWith("127.0.0.1:45123", "7K9M-2P4Q", "jack-desktop-client");
+    expect(screen.getByText("482 910")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Codes Match — Request Access" }));
+    await screen.findByRole("heading", { name: "Connected" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Status" }));
+    await screen.findByText("9s");
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    await screen.findByRole("button", { name: "Add Device" });
+  });
+
+  it("handles SAS mismatch and wrong/expired code errors without showing Connected", async () => {
+    setupBaseMocks();
+    vi.spyOn(jackApi, "epClientStartPairing").mockResolvedValue({
+      stage: "Error",
+      error: "ERR_PAKE_BINDING_FAILED",
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Device" }));
+    fireEvent.change(screen.getByLabelText("Temporary Auth Code"), { target: { value: "ZZZZ-ZZZZ" } });
+    fireEvent.change(screen.getByLabelText("Host Address (Loopback)"), { target: { value: "127.0.0.1:45123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await screen.findByText("ERR_PAKE_BINDING_FAILED");
+    expect(screen.queryByRole("heading", { name: "Connected" })).toBeNull();
   });
 });

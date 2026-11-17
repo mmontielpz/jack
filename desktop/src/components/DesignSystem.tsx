@@ -67,6 +67,25 @@ export const GearIcon: React.FC = () => (
   </svg>
 );
 
+export const EpWizardSidebar: React.FC<{ activeStep: number }> = ({ activeStep }) => {
+  const steps = ["Pair", "Verify & Approve", "Connected"];
+  return (
+    <aside className="sidebar" aria-label="Easy Pairing steps">
+      {steps.map((label, idx) => {
+        const num = idx + 1;
+        const done = num < activeStep;
+        const active = num === activeStep;
+        return (
+          <div key={label} className={`step-item ${active ? "active" : ""} ${done ? "done" : ""}`}>
+            <span className="step-badge">{done ? "✓" : num}</span>
+            <span>{label}</span>
+          </div>
+        );
+      })}
+    </aside>
+  );
+};
+
 export const WizardSidebar: React.FC<{ activeStep: number }> = ({ activeStep }) => {
   const steps = [
     EN.stages.checkTailscale,

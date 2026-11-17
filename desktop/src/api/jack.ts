@@ -139,6 +139,41 @@ export interface SshAuthTestResult {
   detail: string;
 }
 
+export interface PendingApprovalView {
+  request_id: string;
+  peer_id: string;
+  peer_name: string;
+  requested_scope: string;
+  sas_6digit: string;
+  expires_at: number;
+}
+
+export interface HostShareStatus {
+  active: boolean;
+  state: string;
+  endpoint?: string | null;
+  auth_code?: string | null;
+  expires_at?: number | null;
+  pending_request?: PendingApprovalView | null;
+  paired_peer_id?: string | null;
+  error?: string | null;
+}
+
+export interface EpStatusReadResponse {
+  status: string;
+  os: string;
+  jack_version: string;
+  uptime_seconds: number;
+}
+
+export interface ClientPairingStatus {
+  stage: "Idle" | "Connecting" | "VerifySas" | "WaitingApproval" | "Connected" | "Error";
+  sas_6digit?: string | null;
+  host_id?: string | null;
+  status_read?: EpStatusReadResponse | null;
+  error?: string | null;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -388,7 +423,72 @@ export const jackApi = {
       message: "JACK configuration backed up and reset.",
     };
   },
+  async epHostStartSharing(): Promise<HostShareStatus> {
+    if (isTauri()) return tauriInvoke<HostShareStatus>("ep_host_start_sharing");
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epHostPollStatus(): Promise<HostShareStatus> {
+    if (isTauri()) return tauriInvoke<HostShareStatus>("ep_host_poll_status");
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epHostDecideApproval(requestId: string, approved: boolean): Promise<HostShareStatus> {
+    if (isTauri()) return tauriInvoke<HostShareStatus>("ep_host_decide_approval", { requestId, approved });
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epHostRevokePeer(peerId: string): Promise<void> {
+    if (isTauri()) return tauriInvoke<void>("ep_host_revoke_peer", { peerId });
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epHostStopSharing(): Promise<void> {
+    if (isTauri()) return tauriInvoke<void>("ep_host_stop_sharing");
+    return;
+  },
+  async epClientStartPairing(endpoint: string, authCode: string, clientName: string): Promise<ClientPairingStatus> {
+    if (isTauri()) {
+      return tauriInvoke<ClientPairingStatus>("ep_client_start_pairing", { endpoint, authCode, clientName });
+    }
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epClientConfirmSas(confirmed: boolean): Promise<ClientPairingStatus> {
+    if (isTauri()) return tauriInvoke<ClientPairingStatus>("ep_client_confirm_sas", { confirmed });
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epClientPollStatus(): Promise<ClientPairingStatus> {
+    if (isTauri()) return tauriInvoke<ClientPairingStatus>("ep_client_poll_status");
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epClientReadStatus(): Promise<EpStatusReadResponse> {
+    if (isTauri()) return tauriInvoke<EpStatusReadResponse>("ep_client_read_status");
+    throw new Error("Easy Pairing backend requires the native JACK Desktop runtime.");
+  },
+  async epClientDisconnect(): Promise<void> {
+    if (isTauri()) return tauriInvoke<void>("ep_client_disconnect");
+    return;
+  },
 };
+
+const CROCKFORD_SET = new Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ".split(""));
+
+export function normalizeAuthCode(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toUpperCase()
+    .replace(/[-\s]/g, "")
+    .replace(/O/g, "0")
+    .replace(/[IL]/g, "1");
+  if (cleaned.length <= 4) return cleaned;
+  return `${cleaned.slice(0, 4)}-${cleaned.slice(4, 8)}`;
+}
+
+export function isValidAuthCode(raw: string): boolean {
+  const cleaned = raw
+    .trim()
+    .toUpperCase()
+    .replace(/[-\s]/g, "")
+    .replace(/O/g, "0")
+    .replace(/[IL]/g, "1");
+  return cleaned.length === 8 && cleaned.split("").every((c) => CROCKFORD_SET.has(c));
+}
 
 const RESERVED_ALIASES = new Set([
   "workstation",
