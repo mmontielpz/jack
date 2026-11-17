@@ -22,6 +22,9 @@ jobs:
       - name: Contributor validation
         run: ./scripts/dev-check.sh
 
+      - name: JACK-VM-GRANT-001 & dogfood harness unit tests
+        run: python3 -m unittest discover -s scripts/dogfood -p "test_*.py" -v
+
       - name: Isolated Ubuntu native smoke test
         run: |
           T="$(mktemp -d)"
