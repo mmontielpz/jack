@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: "JACK: Just Connect"
+message: "If you use JACK in your work or research, please cite it using the metadata below."
+type: software
+authors:
+  - family-names: "Lopez"
+    given-names: "Miguel"
+repository-code: "https://github.com/mmontielpz/jack"
+url: "https://github.com/mmontielpz/jack"
+license: MIT
+version: "0.2.0-rc.1"
+keywords:
+  - ssh
+  - tailscale
+  - tauri
+  - rust
+  - pake
+  - spake2
+  - tls13
+  - device-pairing
