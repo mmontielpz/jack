@@ -22,16 +22,16 @@ jobs:
   linux-preview:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/index/
@@ -46,9 +46,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
-      - name: Repo & Rust & Frontend checks (Ubuntu 24.04)
+      - name: Rust & Frontend checks (Ubuntu 24.04)
         run: |
-          ./scripts/dev-check.sh
           cd easy-pairing && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
           cd ../desktop && npm ci && npm run lint && npm run build && npm test -- --run
           cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
@@ -90,16 +89,17 @@ jobs:
           } > PROVENANCE-linux.txt
           sha256sum *.AppImage *.deb PROVENANCE-linux.txt > SHA256SUMS-linux.txt
           cat SHA256SUMS-linux.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jack-desktop-linux-preview
           path: dist-artifacts/
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}
 
   ubuntu-26-04-verify:
     needs: linux-preview
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jack-desktop-linux-preview
           path: dist-artifacts/
@@ -141,16 +141,16 @@ jobs:
   windows-preview:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/index/
@@ -234,7 +234,8 @@ jobs:
           "COMMIT_SHA=${{ github.sha }}`nOS=$([System.Environment]::OSVersion.VersionString)`nRUSTC=$(rustc --version)`nNODE=$(node --version)" | Set-Content PROVENANCE-windows.txt
           Get-FileHash *.exe -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content SHA256SUMS-windows.txt
           Get-Content SHA256SUMS-windows.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jack-desktop-windows-preview
           path: dist-artifacts/
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}

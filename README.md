@@ -4,7 +4,7 @@
 
 JACK is a minimal CLI for reaching your own devices over SSH, with optional Tailscale transport.
 
-Stable release: [v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0) (v0.2.0 device-centric features are active on `main`).
+Stable release: [v0.1.1](https://github.com/mmontielpz/jack/releases/tag/v0.1.1) ([v0.1.0](https://github.com/mmontielpz/jack/releases/tag/v0.1.0); v0.2.0 device-centric CLI features are active on `main`, and experimental JACK Desktop + Easy Pairing `v0.2.0-rc.1` is in preview).
 
 - Register and connect to any named device (`jack add <alias>`, `jack connect <alias>`, `jack devices`).
 - Set a default destination for bare `jack` (`jack default <alias>`), or use legacy `jack` / `jack mac`.
