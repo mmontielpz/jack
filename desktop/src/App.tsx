@@ -112,7 +112,7 @@ function mapDeviceStatusBadge(
 }
 
 export function App() {
-  const [appState, setAppState] = useState<AppState>("ONBOARDING");
+  const [appState, setAppState] = useState<AppState>("EASY_PAIRING");
   const [stage, setStage] = useState<OnboardingStage>("WELCOME");
   const [wizardOrigin, setWizardOrigin] = useState<"FIRST_RUN" | "DASHBOARD">("FIRST_RUN");
   const [diagnosticsOrigin, setDiagnosticsOrigin] = useState<"WELCOME" | "DASHBOARD">("DASHBOARD");
@@ -345,115 +345,121 @@ export function App() {
 
   useEffect(() => {
     const boot = async () => {
-      try {
-        const [ver, plat, list] = await Promise.all([
-          jackApi.getCliVersion(),
-          jackApi.getPlatformInfo(),
-          jackApi.listDevices(),
-        ]);
-        setCliVersion(ver);
-        setPlatformInfo(plat);
-        setDevices(list);
+      const params = new URLSearchParams(window.location.search);
+      const epParam = params.get("ep")?.toLowerCase();
+      const stepParam = params.get("step")?.toLowerCase();
+      const stateParam = params.get("state");
 
-        const params = new URLSearchParams(window.location.search);
-        const epParam = params.get("ep")?.toLowerCase();
-        const stepParam = params.get("step")?.toLowerCase();
-        const stateParam = params.get("state");
+      if (epParam === "home") {
+        setAppState("EASY_PAIRING");
+        setEpScreen("HOME");
+      } else if (epParam === "share") {
+        setAppState("EASY_PAIRING");
+        setEpScreen("SHARE");
+        setHostShare({
+          active: true,
+          state: "WaitingForRequest",
+          endpoint: "127.0.0.1:45123",
+          auth_code: "7K9M-2P4Q",
+          expires_at: Math.floor(Date.now() / 1000) + 295,
+        });
+      } else if (epParam === "approve") {
+        setAppState("EASY_PAIRING");
+        setEpScreen("SHARE");
+        setHostShare({
+          active: true,
+          state: "Authorizing",
+          endpoint: "127.0.0.1:45123",
+          auth_code: "7K9M-2P4Q",
+          expires_at: Math.floor(Date.now() / 1000) + 240,
+          pending_request: {
+            request_id: "apr-preview-1",
+            peer_id: "jack:ed25519:demo9f3a2b1c4d5e",
+            peer_name: "linux-workstation",
+            requested_scope: "status.read",
+            sas_6digit: "482 910",
+            expires_at: Math.floor(Date.now() / 1000) + 55,
+          },
+        });
+      } else if (epParam === "enter-code") {
+        setAppState("EASY_PAIRING");
+        setEpScreen("ENTER_CODE");
+        setEpEndpointInput("127.0.0.1:45123");
+        setEpCodeInput("7K9M-2P4Q");
+      } else if (epParam === "verify-sas") {
+        setAppState("EASY_PAIRING");
+        setEpScreen("VERIFY_SAS");
+        setEpClientStatus({ stage: "VerifySas", sas_6digit: "482 910" });
+      } else if (epParam === "connected") {
+        setAppState("EASY_PAIRING");
+        setEpScreen("CONNECTED");
+        setEpClientStatus({
+          stage: "Connected",
+          host_id: "jack:ed25519:host8a7b6c5d4e3f",
+          status_read: { status: "ok", os: "linux", jack_version: "0.1.0", uptime_seconds: 12 },
+        });
+        setEpLiveStatus({ status: "ok", os: "linux", jack_version: "0.1.0", uptime_seconds: 12 });
+      } else if (epParam === "error") {
+        setAppState("EASY_PAIRING");
+        setEpScreen("ENTER_CODE");
+        setErrorMsg(formatEpUserError("ERR_INVITE_EXPIRED"));
+      } else if (stateParam === "dashboard") {
+        setAppState("DASHBOARD");
+      } else if (stateParam === "diagnostics") {
+        setDiagnosticsOrigin("WELCOME");
+        setAppState("DIAGNOSTICS");
+        void loadDiagnostics();
+      } else if (stateParam === "settings") {
+        setAppState("SETTINGS");
+        void loadSettingsData();
+      } else if (stepParam === "01" || stepParam === "welcome") {
+        setAppState("ONBOARDING");
+        setStage("WELCOME");
+      } else if (stepParam === "s1") {
+        setAppState("ONBOARDING");
+        setStage("S1");
+        void checkTailscaleAndMaybeAdvance(false);
+      } else if (stepParam === "s2") {
+        setAppState("ONBOARDING");
+        setStage("S2");
+        void loadDiscovery();
+      } else if (stepParam === "s3") {
+        setAppState("ONBOARDING");
+        setStage("S3");
+        setTargetHost("100.64.0.10");
+        setTargetAlias("demo-device");
+        void runStage3InitialChecks("100.64.0.10", "demo-device", "");
+      } else if (stepParam === "s4") {
+        setAppState("ONBOARDING");
+        setStage("S4");
+        setTargetHost("100.64.0.10");
+        setTargetAlias("demo-device");
+        setSshUser("alice");
+        setCompletionKind("CONNECTED");
+      } else {
+        setAppState("EASY_PAIRING");
+        setEpScreen("HOME");
+      }
 
-        if (epParam === "home") {
-          setAppState("EASY_PAIRING");
-          setEpScreen("HOME");
-        } else if (epParam === "share") {
-          setAppState("EASY_PAIRING");
-          setEpScreen("SHARE");
-          setHostShare({
-            active: true,
-            state: "WaitingForRequest",
-            endpoint: "127.0.0.1:45123",
-            auth_code: "7K9M-2P4Q",
-            expires_at: Math.floor(Date.now() / 1000) + 295,
-          });
-        } else if (epParam === "approve") {
-          setAppState("EASY_PAIRING");
-          setEpScreen("SHARE");
-          setHostShare({
-            active: true,
-            state: "Authorizing",
-            endpoint: "127.0.0.1:45123",
-            auth_code: "7K9M-2P4Q",
-            expires_at: Math.floor(Date.now() / 1000) + 240,
-            pending_request: {
-              request_id: "apr-preview-1",
-              peer_id: "jack:ed25519:demo9f3a2b1c4d5e",
-              peer_name: "linux-workstation",
-              requested_scope: "status.read",
-              sas_6digit: "482 910",
-              expires_at: Math.floor(Date.now() / 1000) + 55,
-            },
-          });
-        } else if (epParam === "enter-code") {
-          setAppState("EASY_PAIRING");
-          setEpScreen("ENTER_CODE");
-          setEpEndpointInput("127.0.0.1:45123");
-          setEpCodeInput("7K9M-2P4Q");
-        } else if (epParam === "verify-sas") {
-          setAppState("EASY_PAIRING");
-          setEpScreen("VERIFY_SAS");
-          setEpClientStatus({ stage: "VerifySas", sas_6digit: "482 910" });
-        } else if (epParam === "connected") {
-          setAppState("EASY_PAIRING");
-          setEpScreen("CONNECTED");
-          setEpClientStatus({
-            stage: "Connected",
-            host_id: "jack:ed25519:host8a7b6c5d4e3f",
-            status_read: { status: "ok", os: "linux", jack_version: "0.1.0", uptime_seconds: 12 },
-          });
-          setEpLiveStatus({ status: "ok", os: "linux", jack_version: "0.1.0", uptime_seconds: 12 });
-        } else if (epParam === "error") {
-          setAppState("EASY_PAIRING");
-          setEpScreen("ENTER_CODE");
-          setErrorMsg(formatEpUserError("ERR_INVITE_EXPIRED"));
-        } else if (stateParam === "dashboard") {
+      // Non-blocking background metadata load: missing bash CLI on Windows never stalls or breaks Easy Pairing
+      const [verRes, platRes, listRes] = await Promise.allSettled([
+        jackApi.getCliVersion(),
+        jackApi.getPlatformInfo(),
+        jackApi.listDevices(),
+      ]);
+      if (verRes.status === "fulfilled") {
+        setCliVersion(verRes.value);
+      }
+      if (platRes.status === "fulfilled") {
+        setPlatformInfo(platRes.value);
+      }
+      if (listRes.status === "fulfilled") {
+        setDevices(listRes.value);
+        if (!epParam && !stepParam && !stateParam && listRes.value.length > 0) {
           setAppState("DASHBOARD");
         } else if (stateParam === "diagnostics") {
-          setDiagnosticsOrigin(list.length > 0 ? "DASHBOARD" : "WELCOME");
-          setAppState("DIAGNOSTICS");
-          void loadDiagnostics();
-        } else if (stateParam === "settings") {
-          setAppState("SETTINGS");
-          void loadSettingsData();
-        } else if (stepParam === "01" || stepParam === "welcome") {
-          setAppState("ONBOARDING");
-          setStage("WELCOME");
-        } else if (stepParam === "s1") {
-          setAppState("ONBOARDING");
-          setStage("S1");
-          void checkTailscaleAndMaybeAdvance(false);
-        } else if (stepParam === "s2") {
-          setAppState("ONBOARDING");
-          setStage("S2");
-          void loadDiscovery();
-        } else if (stepParam === "s3") {
-          setAppState("ONBOARDING");
-          setStage("S3");
-          setTargetHost("100.64.0.10");
-          setTargetAlias("demo-device");
-          void runStage3InitialChecks("100.64.0.10", "demo-device", "");
-        } else if (stepParam === "s4") {
-          setAppState("ONBOARDING");
-          setStage("S4");
-          setTargetHost("100.64.0.10");
-          setTargetAlias("demo-device");
-          setSshUser("alice");
-          setCompletionKind("CONNECTED");
-        } else if (list.length > 0) {
-          setAppState("DASHBOARD");
-        } else {
-          setAppState("EASY_PAIRING");
-          setEpScreen("HOME");
+          setDiagnosticsOrigin(listRes.value.length > 0 ? "DASHBOARD" : "WELCOME");
         }
-      } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : String(err));
       }
     };
     void boot();
@@ -1616,12 +1622,6 @@ export function App() {
                       className="peer-list"
                       role="list"
                       aria-label="Discovered Tailscale devices"
-                      style={{
-                        maxHeight: "calc(100vh - 290px)",
-                        minHeight: 140,
-                        overflowY: "auto",
-                        paddingRight: 4,
-                      }}
                     >
                       {filteredPeers.map((peer) => (
                         <div key={peer.id} role="listitem">
@@ -1732,7 +1732,7 @@ export function App() {
                 {/* Granular Preflight + Network + SSH Auth Status */}
                 <div
                   className="card-box"
-                  style={{ marginBottom: 10, padding: "12px 16px", maxHeight: 220, overflowY: "auto" }}
+                  style={{ marginBottom: 10, padding: "12px 16px" }}
                 >
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>{EN.stage3.preflightTitle}</div>
                   {checksLoading || !preflight ? (

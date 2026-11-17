@@ -92,7 +92,7 @@ describe("JACK Desktop 4-Stage Tailscale-Aware Onboarding", () => {
     // No repeated Windows warning in peer list; responsive list height
     expect(screen.queryByText(/OpenSSH Server must be enabled/i)).toBeNull();
     const listEl = screen.getByRole("list", { name: "Discovered Tailscale devices" });
-    expect(listEl).toHaveStyle({ maxHeight: "calc(100vh - 290px)" });
+    expect(listEl.style.overflowY).toBe("");
 
     // Filter and select Windows peer -> auto-advances to Stage 3
     fireEvent.change(screen.getByLabelText("Filter devices"), { target: { value: "win-lab" } });
@@ -508,5 +508,22 @@ describe("JACK Desktop Easy Pairing (EP-004 Auth Code-First)", () => {
     await waitFor(() => expect(select).not.toBeDisabled());
     fireEvent.change(select, { target: { value: "192.168.1.42" } });
     await waitFor(() => expect(shareSpy).toHaveBeenCalledWith("192.168.1.42"));
+  });
+
+  it("stays on Easy Pairing Home when JACK CLI is unavailable (Windows boot resilience)", async () => {
+    setupBaseMocks();
+    vi.spyOn(jackApi, "getCliVersion").mockRejectedValue(
+      new Error("Failed to execute JACK CLI (jack): program not found"),
+    );
+    vi.spyOn(jackApi, "listDevices").mockRejectedValue(
+      new Error("Failed to execute JACK CLI (jack): program not found"),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Add Device" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Share This Device" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Advanced: Manual SSH" })).toBeInTheDocument();
+    expect(screen.queryByText(/program not found/i)).toBeNull();
   });
 });

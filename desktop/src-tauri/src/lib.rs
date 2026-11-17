@@ -65,6 +65,12 @@ pub fn validate_default_alias(alias: &str) -> Result<(), String> {
 }
 
 pub fn validate_user(user: &str) -> Result<(), String> {
+    if user.contains('\\') {
+        return Err(
+            "Windows account format (DOMAIN\\user) cannot be used directly; enter only the SSH username."
+                .into(),
+        );
+    }
     if user.is_empty() || user.len() > 64 {
         return Err("SSH username must be between 1 and 64 characters.".into());
     }
@@ -161,11 +167,22 @@ fn apply_isolated_home(cmd: &mut Command) {
     }
 }
 
+fn hide_console_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 fn run_jack(args: &[&str]) -> Result<(i32, String, String), String> {
     let bin = resolve_jack_bin();
     let mut cmd = Command::new(&bin);
     cmd.args(args);
     apply_isolated_home(&mut cmd);
+    hide_console_window(&mut cmd);
     let out = cmd
         .output()
         .map_err(|e| format!("Failed to execute JACK CLI ({}): {}", bin.display(), e))?;
@@ -559,13 +576,19 @@ pub fn parse_tailscale_status_json(raw: &str) -> Result<DiscoveryResult, String>
     })
 }
 
-#[tauri::command]
-fn get_cli_version() -> Result<String, String> {
+fn get_cli_version_impl() -> Result<String, String> {
     let (code, stdout, stderr) = run_jack(&["--version"])?;
     if code != 0 {
         return Err(if stderr.is_empty() { stdout } else { stderr });
     }
     Ok(stdout)
+}
+
+#[tauri::command]
+async fn get_cli_version() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(get_cli_version_impl)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -585,7 +608,9 @@ fn get_platform_info() -> PlatformInfo {
     let supported_note = match os.as_str() {
         "linux" if is_wsl2 => "Linux (WSL2 Ubuntu): supported via Linux adapter.".into(),
         "linux" => "Linux (Arch/CachyOS and Ubuntu): supported.".into(),
-        "windows" => "Windows native: requires validated WSL2 Ubuntu path.".into(),
+        "windows" => {
+            "Windows native: Easy Pairing supported; legacy SSH requires WSL2 Ubuntu.".into()
+        }
         _ => format!("Platform '{}': support deferred in V0.1.", os),
     };
     PlatformInfo {
@@ -595,8 +620,7 @@ fn get_platform_info() -> PlatformInfo {
     }
 }
 
-#[tauri::command]
-fn list_devices() -> Result<Vec<DeviceEntry>, String> {
+fn list_devices_impl() -> Result<Vec<DeviceEntry>, String> {
     let (code, stdout, stderr) = run_jack(&["devices", "--json"])?;
     if code != 0 {
         return Err(if stderr.is_empty() { stdout } else { stderr });
@@ -607,22 +631,33 @@ fn list_devices() -> Result<Vec<DeviceEntry>, String> {
 }
 
 #[tauri::command]
-fn get_device_status(alias: String) -> Result<serde_json::Value, String> {
-    validate_default_alias(&alias)?;
-    let (_code, stdout, stderr) = run_jack(&["status", &alias, "--json"])?;
-    if stdout.starts_with('{') {
-        serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse device status: {}", e))
-    } else {
-        Err(if stderr.is_empty() {
-            "Could not query device status.".into()
-        } else {
-            stderr
-        })
-    }
+async fn list_devices() -> Result<Vec<DeviceEntry>, String> {
+    tauri::async_runtime::spawn_blocking(list_devices_impl)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn run_doctor() -> Result<serde_json::Value, String> {
+async fn get_device_status(alias: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_default_alias(&alias)?;
+        let (_code, stdout, stderr) = run_jack(&["status", &alias, "--json"])?;
+        if stdout.starts_with('{') {
+            serde_json::from_str(&stdout)
+                .map_err(|e| format!("Failed to parse device status: {}", e))
+        } else {
+            Err(if stderr.is_empty() {
+                "Could not query device status.".into()
+            } else {
+                stderr
+            })
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn run_doctor_impl() -> Result<serde_json::Value, String> {
     let (_code, stdout, stderr) = run_jack(&["doctor", "--json"])?;
     if stdout.starts_with('{') {
         serde_json::from_str(&stdout)
@@ -637,7 +672,13 @@ fn run_doctor() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn run_diagnose() -> Result<serde_json::Value, String> {
+async fn run_doctor() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(run_doctor_impl)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn run_diagnose_impl() -> Result<serde_json::Value, String> {
     let (_code, stdout, stderr) = run_jack(&["diagnose", "--json"])?;
     if stdout.starts_with('{') {
         serde_json::from_str(&stdout)
@@ -652,11 +693,18 @@ fn run_diagnose() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn get_tailscale_state() -> TailscaleState {
+async fn run_diagnose() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(run_diagnose_impl)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_tailscale_state_impl() -> TailscaleState {
     let (os_family, install_url) = detect_install_url_and_family();
-    let out = Command::new("tailscale")
-        .args(["status", "--json"])
-        .output();
+    let mut cmd = Command::new("tailscale");
+    cmd.args(["status", "--json"]);
+    hide_console_window(&mut cmd);
+    let out = cmd.output();
     match out {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
@@ -726,6 +774,13 @@ fn get_tailscale_state() -> TailscaleState {
     }
 }
 
+#[tauri::command]
+async fn get_tailscale_state() -> Result<TailscaleState, String> {
+    tauri::async_runtime::spawn_blocking(get_tailscale_state_impl)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 fn check_network_reachability_impl(
     host: String,
     dry_run: bool,
@@ -762,9 +817,11 @@ fn check_network_reachability_impl(
 }
 
 #[tauri::command]
-fn check_network_reachability(host: String) -> Result<NetworkReachabilityResult, String> {
+async fn check_network_reachability(host: String) -> Result<NetworkReachabilityResult, String> {
     let dry_run = env::var("JACK_CONNECT_DRY_RUN").as_deref() == Ok("1");
-    check_network_reachability_impl(host, dry_run)
+    tauri::async_runtime::spawn_blocking(move || check_network_reachability_impl(host, dry_run))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn test_ssh_authentication_impl(
@@ -790,19 +847,21 @@ fn test_ssh_authentication_impl(
         });
     }
     let target = format!("{}@{}", user, host);
-    let out = Command::new("ssh")
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=5",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            "NumberOfPasswordPrompts=0",
-            &target,
-            "true",
-        ])
+    let mut cmd = Command::new("ssh");
+    cmd.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "NumberOfPasswordPrompts=0",
+        &target,
+        "true",
+    ]);
+    hide_console_window(&mut cmd);
+    let out = cmd
         .output()
         .map_err(|e| format!("Failed to invoke ssh client: {}", e))?;
 
@@ -840,20 +899,24 @@ fn test_ssh_authentication_impl(
 }
 
 #[tauri::command]
-fn test_ssh_authentication(
+async fn test_ssh_authentication(
     user: String,
     host: String,
     consent: bool,
 ) -> Result<SshAuthTestResult, String> {
     let dry_run = env::var("JACK_CONNECT_DRY_RUN").as_deref() == Ok("1");
-    test_ssh_authentication_impl(user, host, consent, dry_run)
+    tauri::async_runtime::spawn_blocking(move || {
+        test_ssh_authentication_impl(user, host, consent, dry_run)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-fn discover_tailscale_peers() -> DiscoveryResult {
-    let out = Command::new("tailscale")
-        .args(["status", "--json"])
-        .output();
+fn discover_tailscale_peers_impl() -> DiscoveryResult {
+    let mut cmd = Command::new("tailscale");
+    cmd.args(["status", "--json"]);
+    hide_console_window(&mut cmd);
+    let out = cmd.output();
     match out {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
@@ -892,7 +955,13 @@ fn discover_tailscale_peers() -> DiscoveryResult {
 }
 
 #[tauri::command]
-fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
+async fn discover_tailscale_peers() -> Result<DiscoveryResult, String> {
+    tauri::async_runtime::spawn_blocking(discover_tailscale_peers_impl)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn run_preflight_impl(req: WizardSaveRequest) -> PreflightResult {
     let mut checks = Vec::new();
     let mut has_fail = false;
 
@@ -950,7 +1019,7 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
             }
         }
 
-        if let Ok(existing) = list_devices() {
+        if let Ok(existing) = list_devices_impl() {
             if existing.iter().any(|d| d.alias == alias) {
                 has_fail = true;
                 checks.push(PreflightCheckItem {
@@ -1001,8 +1070,8 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
         }
     }
 
-    // 2. JACK CLI availability
-    match get_cli_version() {
+    // 2. JACK CLI availability (required only for Legacy Manual SSH)
+    match get_cli_version_impl() {
         Ok(v) => checks.push(PreflightCheckItem {
             name: "JACK CLI".into(),
             status: "PASS".into(),
@@ -1011,17 +1080,50 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
         }),
         Err(e) => {
             has_fail = true;
+            #[cfg(windows)]
+            let (st, rem) = (
+                "NOT_INSTALLED".to_string(),
+                "Legacy SSH CLI requires WSL2 Ubuntu or Git-Bash with 'jack' installed. Easy Pairing works natively without CLI.".to_string(),
+            );
+            #[cfg(not(windows))]
+            let (st, rem) = (
+                "FAIL".to_string(),
+                "Install JACK CLI or ensure `jack` is on PATH.".to_string(),
+            );
             checks.push(PreflightCheckItem {
                 name: "JACK CLI".into(),
-                status: "FAIL".into(),
+                status: st,
                 detail: e,
-                remediation: Some("Install JACK CLI or ensure `jack` is on PATH.".into()),
+                remediation: Some(rem),
             });
         }
     }
 
+    // 2b. Tailscale status (explicitly reported, never silently skipped)
+    let ts_state = get_tailscale_state_impl();
+    let ts_status = if ts_state.status_category == "CONNECTED" {
+        "PASS"
+    } else if !ts_state.cli_installed {
+        "NOT_INSTALLED"
+    } else {
+        "FAIL"
+    };
+    checks.push(PreflightCheckItem {
+        name: "Tailscale".into(),
+        status: ts_status.into(),
+        detail: ts_state.message,
+        remediation: if ts_status == "PASS" {
+            None
+        } else {
+            Some("Check Tailscale status in Step 1 or use a reachable LAN/IP host.".into())
+        },
+    });
+
     // 3. OpenSSH client availability (independent of config existence)
-    let ssh_available = Command::new("ssh").arg("-V").output().is_ok();
+    let mut ssh_cmd = Command::new("ssh");
+    ssh_cmd.arg("-V");
+    hide_console_window(&mut ssh_cmd);
+    let ssh_available = ssh_cmd.output().is_ok();
     if ssh_available {
         checks.push(PreflightCheckItem {
             name: "OpenSSH client".into(),
@@ -1043,7 +1145,7 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
     }
 
     // 4. Optional platform advisory from jack doctor (WARNING only, non-blocking)
-    if let Ok(doc) = run_doctor() {
+    if let Ok(doc) = run_doctor_impl() {
         let plat_ok = doc
             .pointer("/checks/platform/supported")
             .and_then(|v| v.as_bool())
@@ -1128,6 +1230,13 @@ fn run_preflight(req: WizardSaveRequest) -> PreflightResult {
         can_save: !has_fail,
         checks,
     }
+}
+
+#[tauri::command]
+async fn run_preflight(req: WizardSaveRequest) -> Result<PreflightResult, String> {
+    tauri::async_runtime::spawn_blocking(move || run_preflight_impl(req))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1239,7 +1348,7 @@ fn save_wizard_config(req: WizardSaveRequest) -> Result<SaveResult, String> {
         _ => return Err("Unsupported configuration mode.".into()),
     }
 
-    let devices = list_devices()?;
+    let devices = list_devices_impl()?;
     Ok(SaveResult {
         saved: true,
         devices,
@@ -1260,7 +1369,7 @@ fn set_default_device(alias: String) -> Result<String, String> {
 #[tauri::command]
 fn launch_connect(alias: String) -> Result<ConnectResult, String> {
     validate_default_alias(&alias)?;
-    let devices = list_devices()?;
+    let devices = list_devices_impl()?;
     let target = devices
         .into_iter()
         .find(|d| d.alias == alias)
@@ -1526,6 +1635,9 @@ mod tests {
         assert!(validate_device_alias("a;rm -rf /").is_err());
 
         assert!(validate_user("mike").is_ok());
+        assert!(validate_user(r"COMPUTER\alice")
+            .unwrap_err()
+            .contains("Windows account format"));
         assert!(validate_user("-oProxyCommand=id").is_err());
         assert!(validate_user("user;id").is_err());
 
@@ -1576,7 +1688,7 @@ mod tests {
             confirmed: true,
         };
 
-        let pre = run_preflight(req.clone());
+        let pre = run_preflight_impl(req.clone());
         assert!(pre.can_save);
         assert_eq!(pre.overall, "PASS");
 
@@ -1586,7 +1698,7 @@ mod tests {
         assert_eq!(saved.devices[0].alias, "lab");
 
         // Duplicate device preflight fails closed
-        let dup_pre = run_preflight(WizardSaveRequest {
+        let dup_pre = run_preflight_impl(WizardSaveRequest {
             mode: "device".into(),
             workstation_user: None,
             workstation_host: None,

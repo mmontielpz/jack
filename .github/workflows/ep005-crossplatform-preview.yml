@@ -2,7 +2,7 @@ name: EP-005 Cross-Platform Preview Build
 
 on:
   push:
-    branches: [feat/easy-pairing-ep-005]
+    branches: [feat/easy-pairing-ep-005, feat/easy-pairing-ep-005-win-stab]
   workflow_dispatch:
 
 permissions:
@@ -80,18 +80,48 @@ jobs:
           New-Item -ItemType Directory -Force -Path ..\dist-artifacts | Out-Null
           Copy-Item src-tauri\target\release\bundle\nsis\*.exe ..\dist-artifacts\
           Copy-Item src-tauri\target\release\jack-desktop.exe ..\dist-artifacts\
-      - name: Windows isolated startup smoke check
+      - name: Windows isolated NSIS install, cold/warm profiling, and startup check
         shell: pwsh
         run: |
           $tmp = Join-Path $env:TEMP "jack-ep005-win-smoke"
-          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          $inst = Join-Path $env:TEMP "jack-ep005-win-install"
+          New-Item -ItemType Directory -Force -Path $tmp, $inst | Out-Null
           $env:JACK_HOME = $tmp
           $env:JACK_CONNECT_DRY_RUN = "1"
-          $p = Start-Process -FilePath ".\dist-artifacts\jack-desktop.exe" -PassThru
+
+          $setupExe = (Get-ChildItem ".\dist-artifacts\*setup.exe" | Select-Object -First 1).FullName
+          Write-Host "Installing NSIS: $setupExe -> $inst"
+          $ip = Start-Process -FilePath $setupExe -ArgumentList "/S", "/D=$inst" -Wait -PassThru
+          if ($ip.ExitCode -ne 0) { throw "NSIS silent install failed: $($ip.ExitCode)" }
+          $exePath = Join-Path $inst "jack-desktop.exe"
+          if (-not (Test-Path $exePath)) { $exePath = ".\dist-artifacts\jack-desktop.exe" }
+
+          # Cold start measurement
+          $sw1 = [System.Diagnostics.Stopwatch]::StartNew()
+          $p1 = Start-Process -FilePath $exePath -PassThru
           Start-Sleep -Seconds 3
-          if ($p.HasExited) { throw "jack-desktop.exe exited prematurely with $($p.ExitCode)" }
-          Stop-Process -Id $p.Id -Force
-          Remove-Item -Recurse -Force $tmp
+          $sw1.Stop()
+          if ($p1.HasExited) { throw "Cold start exited prematurely with $($p1.ExitCode)" }
+          $proc1 = Get-Process -Id $p1.Id
+          Write-Host ("WINDOWS_COLD_START_ALIVE_MS={0} MEM_MB={1:N1} CPU_S={2:N2}" -f $sw1.ElapsedMilliseconds, ($proc1.WorkingSet64 / 1MB), $proc1.CPU)
+          Stop-Process -Id $p1.Id -Force
+          Start-Sleep -Seconds 1
+
+          # Warm start measurement
+          $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
+          $p2 = Start-Process -FilePath $exePath -PassThru
+          Start-Sleep -Seconds 3
+          $sw2.Stop()
+          if ($p2.HasExited) { throw "Warm start exited prematurely with $($p2.ExitCode)" }
+          $proc2 = Get-Process -Id $p2.Id
+          Write-Host ("WINDOWS_WARM_START_ALIVE_MS={0} MEM_MB={1:N1} CPU_S={2:N2}" -f $sw2.ElapsedMilliseconds, ($proc2.WorkingSet64 / 1MB), $proc2.CPU)
+          Stop-Process -Id $p2.Id -Force
+
+          $uninst = Join-Path $inst "uninstall.exe"
+          if (Test-Path $uninst) {
+            Start-Process -FilePath $uninst -ArgumentList "/S" -Wait | Out-Null
+          }
+          Remove-Item -Recurse -Force $tmp, $inst -ErrorAction SilentlyContinue
       - name: Generate Windows SHA-256 checksums
         shell: pwsh
         run: |
